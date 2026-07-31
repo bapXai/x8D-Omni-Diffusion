@@ -128,6 +128,34 @@ python3 tools/openai_chat_server.py --port 666
 - `usage` is reported in **bytes** (byte law: tokens == bytes), never tokens.
 - Live Colibrì-style telemetry (`GET /telemetry`) — I/O bytes, blocks,
   mean/max block µs, pin/lru hits, RSS.
+- Modality-tagged SSE chunks (`modality: text|image|audio`) + incremental
+  byte-delta streaming (vLLM-Omni `bridge_states` pattern ported, #46).
+
+## Multi-modal OpenAI wire (byte-native, #46)
+
+Concepts ported from `vllm-project/vllm-omni` (capability map only — we keep
+the byte law, no tensors, no tokenizer). Bytes ARE the signal: a
+`[AUD_START(262)]`-framed canvas denoise IS PCM, a `[IMG_START(260)]`-framed
+canvas denoise IS the image payload.
+
+```
+# TTS-style speech wire (SSE + non-stream)
+curl -N localhost:666/v1/audio/speech -H 'Content-Type: application/json' \
+  -d '{"input":"speak this","stream_format":"sse"}'
+# -> event: speech.audio.delta / speech.audio.done
+
+# Image wire (DALL-E-style b64_json)
+curl localhost:666/v1/images/generations -H 'Content-Type: application/json' \
+  -d '{"prompt":"a byte-native cat"}'
+# -> {"data": [{"b64_json": "..."}]}
+
+# Chat SSE now carries modality + incremental byte deltas
+curl -N localhost:666/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hi"}],"stream":true}'
+```
+
+See `research/vLLM-Omni-Gap-Analysis-2026.md` for the full comparison and
+port-order rationale.
 
 ## Low-RAM from-disk serving (~1 GB target)
 

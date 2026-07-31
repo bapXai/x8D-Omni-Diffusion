@@ -17,10 +17,15 @@ from tools.openai_chat_server import (  # noqa: E402
     MODEL_ID,
     build_models_response,
     byte_pipeline,
+    byte_pipeline_ids,
+    detect_modality,
     error_response,
     extract_last_user_message,
     handle_request_body,
+    _iter_byte_deltas,
     process_chat_completion,
+    process_image,
+    process_speech,
 )
 
 
@@ -34,6 +39,58 @@ def _valid_body(message="Hello byte world"):
         "max_tokens": 256,
         "temperature": 0.0,
     }
+
+
+class ModalityAndWireTest(unittest.TestCase):
+    """Multi-modal wire helpers ported from vLLM-Omni (#46)."""
+
+    def test_detect_modality_by_markers(self):
+        self.assertEqual(detect_modality([260, 97, 98, 261]), "image")
+        self.assertEqual(detect_modality([262, 97, 98, 263]), "audio")
+        self.assertEqual(detect_modality([97, 98, 99]), "text")
+
+    def test_byte_deltas_reassemble(self):
+        text = "x8D says incremental bytes rule the canvas."
+        deltas = _iter_byte_deltas(text, chunk_bytes=8)
+        self.assertGreater(len(deltas), 1)
+        self.assertEqual("".join(deltas), text)
+        for d in deltas:
+            self.assertIsInstance(d, str)
+
+    def test_byte_pipeline_ids_returns_canvas(self):
+        ids = byte_pipeline_ids("canvas")
+        self.assertTrue(all(0 <= i <= 263 for i in ids))
+        self.assertGreater(len(ids), 0)
+
+    def test_process_speech_non_stream(self):
+        resp = process_speech({"model": MODEL_ID, "input": "hello", "response_format": "pcm"})
+        self.assertIn("audio_b64", resp)
+        self.assertEqual(resp["response_format"], "pcm")
+        import base64
+        self.assertGreater(len(base64.b64decode(resp["audio_b64"])), 0)
+
+    def test_process_speech_emits_sse_events(self):
+        events = []
+        result = process_speech({"model": MODEL_ID, "input": "hi"}, emit=events.append)
+        self.assertIsNone(result)
+        types = [e["type"] for e in events]
+        self.assertEqual(types, ["speech.audio.delta", "speech.audio.done"])
+        self.assertIn("audio", events[0])
+
+    def test_process_image_b64_json(self):
+        resp = process_image({"model": MODEL_ID, "prompt": "a cat"})
+        self.assertIn("data", resp)
+        self.assertIn("b64_json", resp["data"][0])
+        import base64
+        self.assertGreater(len(base64.b64decode(resp["data"][0]["b64_json"])), 0)
+
+    def test_speech_missing_input_raises(self):
+        with self.assertRaises(ChatCompletionError):
+            process_speech({"model": MODEL_ID})
+
+    def test_image_missing_prompt_raises(self):
+        with self.assertRaises(ChatCompletionError):
+            process_image({"model": MODEL_ID})
 
 
 class ChatCompletionCoreTest(unittest.TestCase):

@@ -23,6 +23,8 @@ Endpoints:
     GET  /telemetry            -> telemetry dashboard
     GET  /v1/models            -> {"object": "list", "data": [{...}]}
     POST /v1/chat/completions  -> OpenAI completion (stream + non-stream)
+    POST /v1/audio/speech      -> TTS wire (SSE + non-stream, #46)
+    POST /v1/images/generations -> image wire (b64_json, #46)
 
 Run:  python3 tools/openai_chat_server.py --port 666
       python3 tools/openai_chat_server.py --port 666 --disk-repo ./x8d_weights
@@ -31,6 +33,7 @@ Run:  python3 tools/openai_chat_server.py --port 666
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -43,6 +46,10 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from omni_diffusion.models.dream.byte_tokenizer import (  # noqa: E402
+    AUD_END_TOKEN_ID,
+    AUD_START_TOKEN_ID,
+    IMG_END_TOKEN_ID,
+    IMG_START_TOKEN_ID,
     MASK_TOKEN_ID,
     ByteTokenizer,
 )
@@ -149,6 +156,49 @@ def byte_pipeline(text: str) -> str:
     return _TOKENIZER.decode_text(denoised)
 
 
+def byte_pipeline_ids(text: str) -> List[int]:
+    """Run the byte pipeline and return the raw denoised canvas ids (0-263).
+
+    Exposes the canvas itself (not just the text decode) so callers can frame
+    audio/image outputs and tag modality (#46). Mirrors ``byte_pipeline``:
+    [BOS .. bytes .. EOS] -> mask -> denoise (deterministic, seed 0).
+    """
+    ids = _TOKENIZER.encode(text.encode("utf-8"), add_special_tokens=True)
+    canvas = _TOKENIZER.mask_canvas(len(ids))
+    _TELEMETRY.begin_block()
+    try:
+        denoised = _SAMPLER.denoise(canvas, steps=CANVAS_STEPS, seed=_CANVAS_SEED)
+    finally:
+        _TELEMETRY.end_block()
+        _TELEMETRY.record_io(len(ids))
+    return list(denoised)
+
+
+def _generate_bytes(text: str, modality: str) -> bytes:
+    """Frame ``text`` as image/audio bytes and denoise to raw payload bytes.
+
+    Frames the input as ``[BOS] [IMG_START(260)] bytes [IMG_END(261)] [EOS]``
+    (image) or ``[BOS] [AUD_START(262)] bytes [AUD_END(263)] [EOS]`` (audio),
+    runs the deterministic byte-diffusion pipeline, then decodes the canvas
+    back to raw content bytes (specials skipped). The raw bytes are the
+    payload for ``b64_json`` (image) or PCM (audio) wire responses (#46).
+    """
+    if modality == "image":
+        ids = _TOKENIZER.encode_image(text.encode("utf-8"), add_special_tokens=True)
+    elif modality == "audio":
+        ids = _TOKENIZER.encode_audio(text.encode("utf-8"), add_special_tokens=True)
+    else:
+        ids = _TOKENIZER.encode(text.encode("utf-8"), add_special_tokens=True)
+    canvas = _TOKENIZER.mask_canvas(len(ids))
+    _TELEMETRY.begin_block()
+    try:
+        denoised = _SAMPLER.denoise(canvas, steps=CANVAS_STEPS, seed=_CANVAS_SEED)
+    finally:
+        _TELEMETRY.end_block()
+        _TELEMETRY.record_io(len(ids))
+    return _TOKENIZER.decode(list(denoised), skip_special_tokens=True, as_bytes=True)
+
+
 def _disk_denoise(text: str) -> str:
     """Low-RAM path: reverse an x8D payload slice out of the mmap as filler.
 
@@ -240,6 +290,40 @@ def _truncate_bytes(text: str, limit: int) -> str:
     return encoded[:limit].decode("utf-8", errors="replace")
 
 
+def detect_modality(ids: List[int]) -> str:
+    """Tag a denoised canvas with its byte-law modality.
+
+    Mirrors vLLM-Omni's ``modality`` field on chat SSE chunks (#46): a
+    canvas framed with IMG_START/IMG_END (260/261) is ``image``, framed with
+    AUD_START/AUD_END (262/263) is ``audio``, otherwise ``text``.
+    """
+    if IMG_START_TOKEN_ID in ids:
+        return "image"
+    if AUD_START_TOKEN_ID in ids:
+        return "audio"
+    return "text"
+
+
+def _iter_byte_deltas(text: str, chunk_bytes: int = 24) -> List[str]:
+    """Split ``text`` into incremental byte-aligned deltas (vLLM-Omni watermark).
+
+    Emits the same content as a stream of UTF-8-safe increments, so a client
+    appends each delta to render the full reply progressively (the ``bridge``
+    pattern from vLLM-Omni ``StreamingInputState``, expressed in bytes not
+    tokens). Every returned string is a prefix of ``text``.
+    """
+    encoded = text.encode("utf-8")
+    deltas: List[str] = []
+    pos = 0
+    while pos < len(encoded):
+        end = min(pos + chunk_bytes, len(encoded))
+        while end < len(encoded) and (encoded[end] & 0xC0) == 0x80:
+            end += 1
+        deltas.append(encoded[pos:end].decode("utf-8", errors="replace"))
+        pos = end
+    return deltas
+
+
 def _chat_content(last_user: str) -> str:
     """Deterministic assistant content: echo + byte-pipeline denoise result."""
     if _SERVER_MODE == "disk":
@@ -283,19 +367,26 @@ def _process_stream(body: Dict, emit) -> str:
         if max_tokens and max_tokens > 0:
             content = _truncate_bytes(content, max_tokens)
 
-    emit({
-        "id": f"chatcmpl-{uuid.uuid4().hex}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": body.get("model") or MODEL_ID,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
-            }
-        ],
-    })
+    modality = detect_modality(list(content.encode("utf-8")))
+    deltas = _iter_byte_deltas(content)
+    for i, delta in enumerate(deltas):
+        emit({
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": body.get("model") or MODEL_ID,
+            "modality": modality,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "role": "assistant" if i == 0 else None,
+                        "content": delta,
+                    },
+                    "finish_reason": "stop" if i == len(deltas) - 1 else None,
+                }
+            ],
+        })
 
     prompt_bytes = _count_prompt_bytes(messages)
     completion_bytes = len(content.encode("utf-8"))
@@ -304,6 +395,7 @@ def _process_stream(body: Dict, emit) -> str:
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": body.get("model") or MODEL_ID,
+        "modality": modality,
         "choices": [],
         "usage": {
             "prompt_tokens": prompt_bytes,
@@ -414,6 +506,78 @@ def handle_request_body(raw: bytes, stream: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Multi-modal OpenAI wire (issue #46, ported from vLLM-Omni protocol shapes)
+# ---------------------------------------------------------------------------
+
+def process_speech(body: Dict, emit=None) -> Optional[Dict]:
+    """Serve ``POST /v1/audio/speech`` over the byte pipeline (#46).
+
+    Wire shape mirrors vLLM-Omni ``serving_speech.py``:
+    ``event: speech.audio.delta`` -> ``event: speech.audio.done``. The audio
+    payload is raw PCM bytes produced by the byte-canvas denoise of a
+    ``[AUD_START(262)]``-framed canvas (byte law: no codec, bytes ARE the
+    signal). ``usage`` counts are bytes.
+
+    Args:
+        body: parsed request body (``input``, ``voice``, ``response_format``).
+        emit: optional SSE emitter for ``stream_format="sse"``.
+
+    Returns:
+        Non-stream: ``{audio_b64, response_format, usage}`` dict. Stream:
+        None after emitting SSE frames.
+    """
+    text = body.get("input") or body.get("text") or ""
+    if not isinstance(text, str) or not text:
+        raise ChatCompletionError("missing 'input' (a non-empty string is required)")
+    pcm = _generate_bytes(text, "audio")
+    response_format = body.get("response_format") or "pcm"
+    usage = {
+        "input_tokens": len(text.encode("utf-8")),
+        "output_tokens": len(pcm),
+        "total_tokens": len(text.encode("utf-8")) + len(pcm),
+    }
+    if emit is not None:
+        emit({
+            "type": "speech.audio.delta",
+            "audio": base64.b64encode(pcm).decode("ascii"),
+            "response_format": response_format,
+        })
+        emit({
+            "type": "speech.audio.done",
+            "usage": usage,
+        })
+        return None
+    return {
+        "audio_b64": base64.b64encode(pcm).decode("ascii"),
+        "response_format": response_format,
+        "usage": usage,
+    }
+
+
+def process_image(body: Dict) -> Dict:
+    """Serve ``POST /v1/images/generations`` over the byte pipeline (#46).
+
+    Wire shape mirrors vLLM-Omni ``serving_images.py``: ``b64_json`` payload
+    (raw bytes from a ``[IMG_START(260)]``-framed canvas denoise). No VAE, no
+    latent — pixels ARE bytes at ids 0-255 (byte law).
+    """
+    text = body.get("prompt") or body.get("input") or ""
+    if not isinstance(text, str) or not text:
+        raise ChatCompletionError("missing 'prompt' (a non-empty string is required)")
+    img = _generate_bytes(text, "image")
+    return {
+        "created": int(time.time()),
+        "data": [
+            {
+                "b64_json": base64.b64encode(img).decode("ascii"),
+                "url": None,
+                "revised_prompt": None,
+            }
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # HTTP handler + server
 # ---------------------------------------------------------------------------
 
@@ -454,29 +618,74 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
             self._send_static(name, ok_on_missing=True)
 
     def do_POST(self) -> None:
-        """Route POST: /v1/chat/completions (stream + non-stream)."""
-        if self.path != "/v1/chat/completions":
-            self._send_json(404, error_response(f"not found: {self.path}"))
-            return
+        """Route POST: chat completions, audio speech, image generations."""
         content_length = int(self.headers.get("Content-Length", 0) or 0)
         raw = self.rfile.read(content_length)
 
-        wants_stream = False
-        try:
-            wants_stream = bool(json.loads(raw.decode("utf-8")).get("stream"))
-        except Exception:
+        if self.path == "/v1/chat/completions":
             wants_stream = False
+            try:
+                wants_stream = bool(json.loads(raw.decode("utf-8")).get("stream"))
+            except Exception:
+                wants_stream = False
+            if wants_stream:
+                status, payload, chunks = handle_request_body(raw, stream=True)
+                if status != 200:
+                    self._send_json(status, payload or {})
+                    return
+                self._send_sse(chunks)
+                return
+            status, payload = handle_request_body(raw)
+            self._send_json(status, payload)
+            return
 
-        if wants_stream:
-            status, payload, chunks = handle_request_body(raw, stream=True)
-            if status != 200:
-                self._send_json(status, payload or {})
+        if self.path == "/v1/audio/speech":
+            self._route_speech(raw)
+            return
+
+        if self.path == "/v1/images/generations":
+            try:
+                body = json.loads(raw.decode("utf-8"))
+                self._send_json(200, process_image(body))
+            except ChatCompletionError as exc:
+                self._send_json(400, error_response(exc.message, exc.error_type))
+            except Exception as exc:
+                self._send_json(400, error_response(f"malformed JSON: {exc}"))
+            return
+
+        self._send_json(404, error_response(f"not found: {self.path}"))
+
+    def _route_speech(self, raw: bytes) -> None:
+        """Route ``/v1/audio/speech`` (stream=SSE when requested)."""
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            self._send_json(400, error_response(f"malformed JSON: {exc}"))
+            return
+        stream_format = body.get("stream_format") or body.get("stream")
+        if stream_format in ("sse", True):
+            chunks: List[Dict] = []
+
+            def emit(payload: Dict) -> None:
+                chunks.append(payload)
+
+            try:
+                process_speech(body, emit)
+            except ChatCompletionError as exc:
+                chunks.append({
+                    "type": "speech.audio.error",
+                    "error": {"message": exc.message, "type": exc.error_type, "code": 400},
+                })
+                self._send_sse(chunks)
                 return
             self._send_sse(chunks)
             return
-
-        status, payload = handle_request_body(raw)
-        self._send_json(status, payload)
+        try:
+            payload = process_speech(body)
+        except ChatCompletionError as exc:
+            self._send_json(400, error_response(exc.message, exc.error_type))
+            return
+        self._send_json(200, payload)
 
     # -- writers ----------------------------------------------------------
 

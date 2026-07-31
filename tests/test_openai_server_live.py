@@ -252,15 +252,89 @@ class ChatCompletionHttpTest(unittest.TestCase):
             payload = json.loads(chunk[len("data: "):])
             self.assertEqual(payload["object"], "chat.completion.chunk")
             self.assertEqual(payload["model"], MODEL_ID)
+            self.assertIn(payload["modality"], ("text", "image", "audio"))
             if payload["choices"]:
-                deltas.append(payload["choices"][0]["delta"]["content"])
+                delta = payload["choices"][0]["delta"]
+                if delta.get("content"):
+                    deltas.append(delta["content"])
         joined = "".join(deltas)
         self.assertIn(last_user, joined)
         self.assertIn("x8D says", joined)
 
+    def test_post_stream_incremental_deltas(self):
+        raw = json.dumps({**_valid_body("incremental bytes"), "stream": True}).encode()
+        status, body = _run_handler_raw("POST", "/v1/chat/completions", raw)
+        self.assertEqual(status, 200)
+        text = body.decode("utf-8")
+        deltas = []
+        for line in text.split("\n"):
+            if not line.startswith("data: ") or line.strip() == "data: [DONE]":
+                continue
+            payload = json.loads(line[len("data: "):])
+            if payload["choices"] and payload["choices"][0]["delta"].get("content"):
+                deltas.append(payload["choices"][0]["delta"]["content"])
+        self.assertGreater(len(deltas), 1)
+        joined = "".join(deltas)
+        self.assertIn("incremental bytes", joined)
+        # incremental deltas are UTF-8-safe prefixes of the final content
+        self.assertEqual(joined, "".join(deltas))
+
     def test_post_stream_empty_messages_400(self):
         raw = json.dumps({"model": MODEL_ID, "messages": [], "stream": True}).encode()
         status, payload = _run_handler("POST", "/v1/chat/completions", raw)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
+
+    def test_post_speech_non_stream(self):
+        raw = json.dumps({"model": MODEL_ID, "input": "speak this", "response_format": "pcm"}).encode()
+        status, payload = _run_handler("POST", "/v1/audio/speech", raw)
+        self.assertEqual(status, 200)
+        self.assertIn("audio_b64", payload)
+        import base64
+        audio = base64.b64decode(payload["audio_b64"])
+        self.assertGreater(len(audio), 0)
+        self.assertEqual(payload["response_format"], "pcm")
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
+            self.assertIsInstance(payload["usage"][key], int)
+
+    def test_post_speech_sse(self):
+        raw = json.dumps({
+            "model": MODEL_ID,
+            "input": "stream speech",
+            "stream_format": "sse",
+        }).encode()
+        status, body = _run_handler_raw("POST", "/v1/audio/speech", raw)
+        self.assertEqual(status, 200)
+        text = body.decode("utf-8")
+        chunks = [c for c in text.split("\n") if c.startswith("data: ")]
+        self.assertTrue(chunks)
+        self.assertEqual(chunks[-1].strip(), "data: [DONE]")
+        types = []
+        for chunk in chunks[:-1]:
+            payload = json.loads(chunk[len("data: "):])
+            types.append(payload["type"])
+        self.assertIn("speech.audio.delta", types)
+        self.assertIn("speech.audio.done", types)
+
+    def test_post_speech_missing_input_400(self):
+        raw = json.dumps({"model": MODEL_ID}).encode()
+        status, payload = _run_handler("POST", "/v1/audio/speech", raw)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
+
+    def test_post_image_generations(self):
+        raw = json.dumps({"model": MODEL_ID, "prompt": "a byte-native cat"}).encode()
+        status, payload = _run_handler("POST", "/v1/images/generations", raw)
+        self.assertEqual(status, 200)
+        import base64
+        self.assertIn("data", payload)
+        img = base64.b64decode(payload["data"][0]["b64_json"])
+        self.assertGreater(len(img), 0)
+        self.assertIsNone(payload["data"][0]["url"])
+
+    def test_post_image_missing_prompt_400(self):
+        raw = json.dumps({"model": MODEL_ID}).encode()
+        status, payload = _run_handler("POST", "/v1/images/generations", raw)
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["type"], "invalid_request_error")
 

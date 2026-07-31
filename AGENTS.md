@@ -373,6 +373,28 @@ README. Docs/research/AGENTS/tools/web NEVER go to HF. Byte-native rule
 stands: no safetensors/vocab.json/merges.txt anywhere. `CHANGELOG.md` tracks
 all merged work by issue number.
 
+**vLLM-Omni gap analysis (#46, audited 2026-07-31 vs live clone)** —
+`vllm-project/vllm-omni` (1123 py files, Apache-2.0) is a vLLM fork that
+serves omni-modality + non-AR diffusion models. Audit findings:
+- They have **NO sub-byte packing** (finest = NF4 4-bit) and **NO discrete/
+  byte diffusion** (all continuous-latent DiT + VAE). Their mmap weight
+  loading is a transient staging trick (copy shard → release handles), not
+  persistent compressed-state-is-running-state. Our U8×0.001 = 0.008
+  bit/weight + `MappedX8DReader` live mmap strictly beats them.
+- Ported CONCEPTS (byte-native, our models, pure stdlib): `modality` field
+  on chat SSE chunks; `/v1/audio/speech` (SSE `speech.audio.delta/done` +
+  non-stream) and `/v1/images/generations` (`b64_json`) wire protocols;
+  incremental UTF-8-safe byte-delta streaming (`_iter_byte_deltas` =
+  vLLM-Omni `bridge_states` watermark pattern). See
+  `research/vLLM-Omni-Gap-Analysis-2026.md`.
+- NOT ported (byte-law rejects): msgspec/ZMQ payload layer, OmniKVTransfer,
+  continuous diffusion schedulers, GPU offload hooks, upstream sampler
+  kernels, fullduplex/world-model experimental stack.
+- Open items for later: pure-Python stage chain (text→image→audio canvas,
+  we route customers not stages); hidden-state→8x8-block predictor seam for
+  a real torch MTP head (#7); per-boundary quant policy
+  (`ComponentQuantizationConfig` analog).
+
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a
   lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;
@@ -500,6 +522,7 @@ x8D-Omni-Diffusion/
 │   └── Depth-Context-Attention-Frameworks-2026.md  # [#24] AttnRes/KDA/mHC/Engram/CLVR + x8D map
 │   └── Colibri-Deep-Dive-2026.md      # [#41] JustVugg/colibri 24GB-GLM-5.2 audit + mmap/telemetry port
 │   └── Low-RAM-From-Disk-Serving-2026.md  # [#45] llama.cpp/Colibrì/whisper.cpp mechanism + --disk-repo
+│   └── vLLM-Omni-Gap-Analysis-2026.md  # [#46] omni routing/UI/MTP wire map + port order
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup
@@ -539,7 +562,7 @@ x8D-Omni-Diffusion/
     ├── compute-wer.py                 # WER eval
     ├── bench_byte_core.py             # [#14] byte-core micro-benchmarks
     ├── import_hf_dataset.py           # [#25] CLI: HF dataset -> x8D block-compressed
-    ├── openai_chat_server.py          # [#43/#45] OpenAI endpoint + web UI + --disk-repo low-RAM
+    ├── openai_chat_server.py          # [#43/#45/#46] OpenAI endpoint + web UI + --disk-repo + audio/image/modal wire
     ├── quantize_kimi_k3.py            # [#10] Kimi-K3 pointer quantizer (live)
     └── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
 

@@ -5,6 +5,27 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Added — #46
+- **vLLM-Omni gap analysis** — audited `vllm-project/vllm-omni` (1123 py
+  files, Apache-2.0) for omni routing, multi-modal UI, MTP, and quantization.
+  Key finding: NO sub-byte packing, NO discrete diffusion (all continuous-
+  latent DiT + VAE); their mmap weight loading is a transient staging trick,
+  not persistent compressed-state-is-running-state. See
+  `research/vLLM-Omni-Gap-Analysis-2026.md`.
+- **Modality-tagged SSE** — chat completion chunks now carry
+  `modality: text|image|audio` (vLLM-Omni `OmniChatCompletionStreamResponse`
+  field, detected from IMG_START/AUD_START canvas markers).
+- **Incremental byte-delta streaming** — `_iter_byte_deltas` splits chat
+  content into UTF-8-safe incremental deltas (vLLM-Omni `bridge_states`
+  watermark pattern, expressed in bytes not tokens).
+- **`POST /v1/audio/speech`** — TTS wire (SSE `speech.audio.delta/done` +
+  non-stream `audio_b64`); audio is raw PCM bytes from a `[AUD_START(262)]`-
+  framed canvas denoise.
+- **`POST /v1/images/generations`** — DALL-E-style `b64_json` wire; image is
+  raw bytes from a `[IMG_START(260)]`-framed canvas denoise.
+- Tests: `ModalityAndWireTest` (8 tests) + live speech/image/SSE coverage.
+  Full suite: 318 tests OK (7 skipped), clean under `-W error::ResourceWarning`.
+
 ### Added — #43, #44, #45
 - **Web UI (`web/`)** — ChatGPT-style byte-native chat: sidebar history,
   streaming caret, byte-usage meta, live `/telemetry` refresh, responsive
