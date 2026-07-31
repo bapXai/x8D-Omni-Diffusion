@@ -103,6 +103,26 @@ class SpeculativeQuantizeTest(unittest.TestCase):
         q2, _ = speculative_quantize(data, max_steps=16, seed=7)
         self.assertEqual(q1, q2)
 
+    def test_speculative_quantize_lossless_on_low_surrogate_block(self):
+        # regression: a block whose sha256 surrogate lands under 0.002 makes
+        # byte-0 confidence (block_conf/2) fall below the 0.001 threshold,
+        # which used to re-noise correct zero bytes and corrupt the stream.
+        # 63 zero bytes + 0xfe has surrogate ~0.00029 (< 0.002) at step 0.
+        block = b"\x00" * 63 + b"\xfe"
+        self.assertLess(_block_surrogate(block, 0), CONFIDENCE_THRESHOLD)
+        quanta, stats = speculative_quantize(block, max_steps=16, seed=1)
+        restored = bytes(int(round(q / LAW)) & 0xFF for q in quanta)
+        self.assertEqual(restored, block)
+        self.assertEqual(stats["regenerations"], 0)
+
+    def test_speculative_quantize_lossless_zero_heavy_stream(self):
+        # framing-heavy data (many u16/u64 length fields = many 0x00 bytes)
+        # must round-trip exactly; previously regenerated zero bytes corrupted it
+        data = b"\x00" * 4096 + bytes(range(256)) + b"\x00" * 1024
+        quanta, _ = speculative_quantize(data, max_steps=16, seed=3)
+        restored = bytes(int(round(q / LAW)) & 0xFF for q in quanta)
+        self.assertEqual(restored, data)
+
     def test_speculative_save_gguf_roundtrip(self):
         data = os.urandom(512)
         tmp = os.path.join(os.path.dirname(__file__), "_tmp_spec.gguf")

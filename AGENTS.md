@@ -118,6 +118,34 @@ gh run list --limit 5
 gh run view <run-id>
 ```
 
+### GitHub + HF Bucket Dual Commit
+
+Every merged change that adds or changes byte-native artifacts
+(`omni_diffusion/` modules, `tools/`, `README`, `research/`) MUST ALSO be
+synced to the HF bucket `bapX/x8D-Omni-Diffusion`.
+
+```bash
+export PATH="/Users/getwinharris/.local/bin:$PATH"
+
+# Upload a local folder into the bucket (uploads/deletes/skips delta)
+hf buckets sync ./staged_dir/ hf://buckets/bapX/x8D-Omni-Diffusion
+
+# Or a single file
+hf buckets cp ./tools/import_hf_dataset.py hf://buckets/bapX/x8D-Omni-Diffusion
+
+# Verify after sync
+hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree
+```
+
+**Dual-commit checklist:**
+1. Commit + push to GitHub; validate CI via `gh run list --limit 5`.
+2. Stage the byte-native artifacts into `staged_dir/`.
+3. `hf buckets sync` the staged folder to `bapX/x8D-Omni-Diffusion`.
+4. Verify with `hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree`.
+
+The enforced bucket rules above still apply — never upload `*.safetensors`,
+`vocab.json`, `merges.txt`, or any BPE artifact; the bucket is byte-native only.
+
 ### Creating Issues
 
 When a user reports or prompts a **new feature**, **bug**, or **issue**, create a GitHub Issue FIRST before writing any code:
@@ -196,6 +224,34 @@ Implemented in `omni_diffusion/x8d_spec_decode.py` (pure stdlib, no torch).
 - Tier 2 SFT: byte-aligned instruction pairs + `[IMG_START]`/`[AUD_START]`
   modality markup; train denoiser via `mask_canvas`/`renoise_to_random_bytes`.
 - **Shard at raw byte offsets**, never mid-UTF-8-codepoint.
+
+**Dataset expertise (byte-native import):**
+- Zero-dep dataset import module `omni_diffusion/x8d_dataset.py` (NEW, #25):
+  imports ANY Hugging Face dataset via the datasets-server HTTP API
+  (`https://datasets-server.huggingface.co/parquet` + `/rows`, no
+  `datasets`/torch dependency), flattens every field to raw 8-bit bytes
+  (text -> UTF-8, image/audio -> raw bytes, numerics -> little-endian), builds
+  a reversible byte stream (MAGIC `X8DDS`), and packs it into an x8D 8x8
+  DSpark-compressed container via `block_compress_dataset` ->
+  `<name>.x8dds.gguf` + manifest.json (lossless roundtrip, threshold 0.001).
+  CLI: `tools/import_hf_dataset.py`. This is the `load_dataset()` equivalent
+  under the byte law — no tokenizer.
+- **Tier mapping additions** (see `research/Omni-Datasets-and-Frontier-Traces-2026.md`):
+  Tier 2 SFT now includes NVIDIA agentic/tool-use/SWE traces
+  (nvidia/Open-SWE-Traces 207k trajectories, Nemotron-Agentic-v1 335k samples,
+  OpenCodeReasoning 1+2, Nemotron-SFT-OpenCode, Cascade-RL-SWE),
+  community-extracted frontier-model traces (Claude Fable 5, GPT-5.6 Sol — MUST
+  dedup across mirrors, permissive licenses only), and Indic multilingual corpora
+  (sarvamai + ai4bharat Sangraha 251B tokens / IndicAlign 74.7M pairs). Tier 1
+  adds NVIDIA Physical-AI / omni-dreams scenes + PhysicalAI-Autonomous-Vehicles-NuRec
+  3DGS (pixel/PCM bytes at ids 0-255).
+- **DiffusionGemma note: LANGUAGE IS ALSO DIFFUSION** —
+  google/diffusiongemma-26B-A4B-it (Apache 2.0) proves text diffusion:
+  canvas_length=256, entropy_bound sampler (diffusion_entropy_bound=0.1),
+  uniform-state diffusion, block-autoregressive canvas commit, >1000 tokens/s
+  H100. x8D does the same over the 264-vocab byte space (256 bytes + specials
+  256-263), re-affirming issue #2 (embed/lm_head -> 264) and #5/#6 (entropy-bound
+  sampler + byte-diffusion training).
 
 Query testing: `tests/test_queries.py` exercises text/image/audio/binary
 queries through the full encode→mask→denoise→decode pipeline in pure Python
@@ -296,6 +352,7 @@ x8D-Omni-Diffusion/
 │   ├── x8d_spec_decode.py             # DSpark 8x8 spec-decode quantizer + size report
 │   ├── x8d_subbyte.py                 # 0.016 bit/weight packed model (32MB=32GB)
 │   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter + pointer loader
+│   ├── x8d_dataset.py                 # [#25] HF datasets-server import -> 8x8 block-compressed .x8dds.gguf
 │   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
 │   │
 │   ├── data/
@@ -338,6 +395,7 @@ x8D-Omni-Diffusion/
 │   ├── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2 matrix
 │   ├── Byte-Core-Optimizations.md     # [#14] 6-41x byte-core speedups + [#18-#23] LUT round
 │   ├── Frontier-Benchmarks-2026.md    # [#15] x8D vs GPT-5.6/K3/Opus5/V4/... + arch deep-dive
+│   ├── Omni-Datasets-and-Frontier-Traces-2026.md  # [#25/#26] NVIDIA/sarvamai/ai4bharat + Fable5/Sol traces + DiffusionGemma
 │   └── Depth-Context-Attention-Frameworks-2026.md  # [#24] AttnRes/KDA/mHC/Engram/CLVR + x8D map
 │
 ├── scripts/
@@ -360,6 +418,7 @@ x8D-Omni-Diffusion/
 │   ├── test_x8d_hf.py                 # [#9] shard->gguf + MoE on-disk serving
 │   ├── test_pointer_quantize.py       # [#10] Kimi-K3 pointer map + forward-identical
 │   ├── test_quantize_hf.py            # [#17] generic HF pointer quantizer
+│   ├── test_x8d_dataset.py            # [#25] HF dataset import + block-compress
 │   └── (test_moe_disk.py)             # [#9] planned
 │
 └── tools/
@@ -371,6 +430,7 @@ x8D-Omni-Diffusion/
     ├── evaluate_libritts.py
     ├── compute-wer.py                 # WER eval
     ├── bench_byte_core.py             # [#14] byte-core micro-benchmarks
+    ├── import_hf_dataset.py           # [#25] CLI: HF dataset -> x8D block-compressed
     ├── quantize_kimi_k3.py            # [#10] Kimi-K3 pointer quantizer (live)
     └── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
 ```
@@ -382,10 +442,16 @@ HF bucket: https://huggingface.co/buckets/bapX/x8D-Omni-Diffusion (byte-native o
 
 ## 🧪 Testing Rules
 
-- Every new module MUST have a corresponding test in `tests/`.
+- Every new module MUST have a corresponding test in `tests/`
+  (e.g. `x8d_dataset.py` -> `tests/test_x8d_dataset.py`).
 - **Byte-native core tests run on pure Python stdlib `unittest`** — NO torch/transformers
   required. Command: `python3 -m unittest discover -s tests -v`.
+- Also run with ResourceWarning promoted to errors:
+  `python3 -W error::ResourceWarning -m unittest discover -s tests -v`.
 - Torch-dependent tests (model forward, training) are gated with `skipUnless(HAS_TRANSFORMERS)`.
+- **Network-gated tests**: live tests that hit datasets-server must be
+  `@unittest.skipUnless(_NETWORK_OK, ...)` behind a module-level probe; offline
+  tests MUST cover the same code paths with synthetic data (no network).
 - Tests MUST pass before any commit.
 - Use `gh run list` to verify CI after pushing.
 

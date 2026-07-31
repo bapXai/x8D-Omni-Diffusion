@@ -59,6 +59,18 @@ The byte-native framework needs NO image tokenizer: images are raw 8-bit byte
 streams (ids 0-255) placed between IMG_START/IMG_END on the diffusion canvas.
 MagViT-v2 was removed — see `omni_diffusion/data/processor/image_processor.py`.
 
+## Dataset import (byte-native)
+
+Any Hugging Face dataset can be pulled straight into a byte-native x8D
+container with no tokenizer and no `datasets`/torch dependency — it is fetched
+via the datasets-server HTTP API and packed into an 8x8 DSpark-compressed
+`.x8dds.gguf` stream. Text, image, and audio fields all arrive as raw 8-bit
+bytes (ids 0-255); text is UTF-8, media is raw bytes, numerics are little-endian.
+
+```
+python3 tools/import_hf_dataset.py --dataset sarvamai/indic-diarbench --config Assamese --split train --length 50 --out ./datasets/
+```
+
 
 ## SFT
 #### 1. Data Format

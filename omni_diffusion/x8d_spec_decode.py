@@ -145,15 +145,27 @@ def speculative_quantize(
     for block in blocks:
         current = block
         for _ in range(max_steps):
+            current_quanta = quantize(current)
             # one sha256 per block, not one per position (64x fewer hashes)
             block_conf = float(_block_surrogate(current, step))
             confidence = [(block_conf + byte_scale[b]) / 2.0 for b in current]
             failed = _verify_positions(
-                current,
+                current_quanta,
                 confidence,
                 heavy_load=heavy_load,
                 verify_len=verify_len,
             )
+            # Lossless guard: a position whose coordinate re-decodes to its
+            # original byte must NEVER be regenerated. quantize() is exact
+            # (b*0.001 -> round(b*0.001/0.001) == b), so the confidence
+            # surrogate alone must not flag correct bytes -- e.g. byte 0 has
+            # confidence block_conf/2 and would fall under the 0.001
+            # threshold in low-hash blocks, corrupting zero-heavy data.
+            failed = [
+                i
+                for i in failed
+                if (int(round(current_quanta[i] / LAW)) & 0xFF) != current[i]
+            ]
             if not failed:
                 break
             stats["regenerations"] += 1
