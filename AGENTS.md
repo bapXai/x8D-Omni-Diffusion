@@ -313,7 +313,8 @@ x8D-Omni-Diffusion/
 │   ├── Config-Mapping-DiffusionGemma-to-x8D.md
 │   ├── Needle-Dependency-Audit.md     # dep-by-dep audit vs cactus-compute/needle
 │   ├── Training-Dataset-and-Quantization-Plan.md
-│   └── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2.3 matrix
+│   ├── Kimi-K3-x8D-Pointer-Quantization.md  # [#10] 1.56TB->2.837GB proof
+│   └── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2 matrix
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup
