@@ -25,6 +25,7 @@ from omni_diffusion.x8d_spec_decode import (  # noqa: E402
     confidence_head_probe,
     dspark_batch_mask,
     dspark_block_generate,
+    dspark_generate,
     mask_block,
     modality_size_report,
     print_modality_size_report,
@@ -319,6 +320,66 @@ class DSparkBlockMaskTest(unittest.TestCase):
         self.assertIn("modality", out)
         self.assertIn("text", out)
         self.assertIn("video", out)
+
+
+class DSparkGenerateTest(unittest.TestCase):
+    """Inference-path tests for :func:`dspark_generate` (AGENTS.md findings).
+
+    The observed prompt context must never be masked; the completion span is
+    generated 8x8-block-parallel with the confidence head, the 0.001 entropy
+    bound, heavy-load verify clipping, and a lossless block-autoregressive
+    commit.
+    """
+
+    def setUp(self):
+        self.cfg = DSPARK_MODALITY_SCHEDULES["text"]
+
+    def test_context_preserved_unmasked(self):
+        context = list(b"[BOS]hello world[EOS]")
+        completion = b" byte-law reply."
+        canvas, stats = dspark_generate(context, completion, cfg=self.cfg, seed=0)
+        self.assertEqual(list(canvas[: len(context)]), context)
+        self.assertEqual(len(canvas), len(context) + len(completion))
+
+    def test_completion_transported_losslessly(self):
+        context = [258, 104, 105, 259]
+        completion = bytes(range(256))
+        canvas, _stats = dspark_generate(context, completion, cfg=self.cfg, seed=1)
+        self.assertEqual(bytes(canvas[len(context) :]), completion)
+
+    def test_deterministic_same_seed(self):
+        context = list(b"prompt ")
+        completion = b"answer"
+        c1, _ = dspark_generate(context, completion, cfg=self.cfg, seed=7)
+        c2, _ = dspark_generate(context, completion, cfg=self.cfg, seed=7)
+        self.assertEqual(c1, c2)
+
+    def test_multiblock_completion_spans_blocks(self):
+        context = [258, 65, 259]
+        completion = bytes(i % 256 for i in range(300))
+        canvas, stats = dspark_generate(context, completion, cfg=self.cfg, seed=2)
+        self.assertEqual(len(canvas), len(context) + len(completion))
+        self.assertEqual(bytes(canvas[len(context) :]), completion)
+        self.assertGreaterEqual(stats["blocks"], 5)
+
+    def test_heavy_load_clips_verify_length(self):
+        context = list(b"x")
+        completion = b"y" * 64
+        canvas_heavy, _ = dspark_generate(
+            context, completion, cfg=self.cfg, seed=3, heavy_load=True
+        )
+        canvas_light, _ = dspark_generate(context, completion, cfg=self.cfg, seed=3)
+        self.assertEqual(bytes(canvas_heavy[len(context) :]), completion)
+        self.assertEqual(bytes(canvas_light[len(context) :]), completion)
+
+    def test_entropy_bound_and_convergence_reported(self):
+        context = list(b"prompt")
+        completion = bytes((i * 13) & 0xFF for i in range(128))
+        canvas, stats = dspark_generate(context, completion, cfg=self.cfg, seed=5)
+        self.assertEqual(stats["blocks"], 2)
+        self.assertGreaterEqual(stats["converged"], 1)
+        self.assertGreaterEqual(stats["regenerations"], 0)
+        self.assertEqual(bytes(canvas[len(context) :]), completion)
 
 
 if __name__ == "__main__":

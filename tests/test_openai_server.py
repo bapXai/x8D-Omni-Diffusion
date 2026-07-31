@@ -224,6 +224,27 @@ class BytePipelineTest(unittest.TestCase):
             self.assertIsInstance(content, str)
             self.assertIn(text, content)
 
+    def test_pipeline_returns_readable_echo_and_reply(self):
+        out = byte_pipeline("hello")
+        self.assertIn("hello", out)
+        self.assertIn("Byte-law reply", out)
+
+    def test_pipeline_reply_is_not_mojibake(self):
+        out = byte_pipeline("What is the weather?")
+        self.assertNotIn("\ufffd", out)
+        for ch in out:
+            self.assertNotIn(ch, "\x00\x01\x02\x03")
+
+    def test_pipeline_ids_preserve_context(self):
+        text = "prompt bytes"
+        ids = byte_pipeline_ids(text)
+        from omni_diffusion.models.dream.byte_tokenizer import ByteTokenizer
+
+        tok = ByteTokenizer()
+        context = tok.encode(text.encode("utf-8"), add_special_tokens=True)
+        self.assertEqual(list(ids[: len(context)]), context)
+        self.assertGreater(len(ids), len(context))
+
 
 def json_dumps(obj) -> bytes:
     import json

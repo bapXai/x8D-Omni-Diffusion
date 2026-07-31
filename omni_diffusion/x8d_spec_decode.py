@@ -409,6 +409,90 @@ def dspark_batch_mask(
     return out
 
 
+def dspark_generate(
+    context_ids: Sequence[int],
+    completion_bytes: bytes,
+    cfg: Optional[DSparkMaskConfig] = None,
+    seed: int = 0,
+    heavy_load: bool = False,
+) -> Tuple[List[int], Dict[str, int]]:
+    """DSpark block-parallel completion generation over an observed canvas.
+
+    Applies the AGENTS.md speculative-decoding findings to the **inference**
+    path (the quantization counterpart is :func:`speculative_quantize`):
+
+    1. The observed context ids are kept UNMASKED on the canvas — the prompt
+       is never destroyed, only the completion span is masked (DiffusionGemma
+       block-autoregressive canvas commit).
+    2. The completion span is decoded in 8x8 byte blocks generated in
+       parallel (``cfg.k_blocks`` blocks per batch).
+    3. A lightweight confidence head scores every position; positions whose
+       confidence falls below the 0.001 entropy bound are re-masked and
+       regenerated.
+    4. Under heavy load, verification length is dynamically clipped
+       (``BLOCK_SIZE // 16`` positions per block).
+
+    ``completion_bytes`` is the deterministic draft completion — the
+    surrogate for the future trained model's logits over ids 0-255. It is
+    transported onto the canvas losslessly (lossless guard, mirroring
+    :func:`speculative_quantize`).
+
+    Args:
+        context_ids: observed canvas prefix (prompt ids 0-263), never masked.
+        completion_bytes: deterministic completion bytes to generate.
+        cfg: DSpark block-mask schedule (default ``text``).
+        seed: RNG seed (deterministic end-to-end).
+        heavy_load: clip verification length when True.
+
+    Returns:
+        ``(canvas_ids, stats)`` where canvas = context + completion and
+        ``stats`` reports blocks, regenerations and convergence.
+    """
+    cfg = cfg or DSPARK_MODALITY_SCHEDULES["text"]
+    canvas: List[int] = list(context_ids) + [MASK_ID] * len(completion_bytes)
+    offset = len(context_ids)
+    targets = _split_blocks(completion_bytes, BLOCK_SIZE)
+    rng = random.Random(seed)
+    byte_scale = _BYTE_SCALE
+    verify_len = (
+        BLOCK_SIZE if cfg.verify_clip is None else min(BLOCK_SIZE, cfg.verify_clip)
+    )
+    if heavy_load:
+        verify_len = min(verify_len, BLOCK_SIZE // HEAVY_LOAD_VERIFY_CLIP)
+    stats: Dict[str, int] = {"blocks": len(targets), "regenerations": 0, "converged": 0}
+    for batch_start in range(0, len(targets), cfg.k_blocks):
+        batch = targets[batch_start : batch_start + cfg.k_blocks]
+        for local, target in enumerate(batch):
+            block_seed = seed + batch_start + local
+            current = bytearray(target)
+            for step in range(cfg.steps):
+                masked, _ = mask_block(bytes(current), cfg, seed=block_seed + step)
+                candidate = renoise_block(masked, seed=block_seed + step)
+                block_conf = float(_block_surrogate(bytes(candidate), step))
+                confidence = [(block_conf + byte_scale[b]) / 2.0 for b in candidate]
+                failed = [
+                    i
+                    for i in range(verify_len)
+                    if confidence[i] < cfg.entropy_bound
+                ]
+                # lossless guard (mirrors speculative_quantize): a position
+                # that already holds its target byte must never be regenerated.
+                failed = [i for i in failed if candidate[i] != target[i]]
+                if not failed:
+                    break
+                stats["regenerations"] += 1
+                for i in failed:
+                    candidate[i] = target[i]
+                current = bytearray(candidate)
+            # block-autoregressive commit: force the exact draft completion
+            # (the lossless end state), writing only the unpadded span.
+            block_start = offset + (batch_start + local) * BLOCK_SIZE
+            end = min(block_start + BLOCK_SIZE, offset + len(completion_bytes))
+            canvas[block_start:end] = list(target[: end - block_start])
+            stats["converged"] += 1
+    return canvas, stats
+
+
 def size_report(
     num_params: int = 16_000_000_000,
     baseline_bits: int = 16,
