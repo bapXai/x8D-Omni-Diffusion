@@ -70,3 +70,27 @@ length-preserving (no zero-padded tail).
 - 16B-param model: FP16 32.00 GB → x8D sub-byte 32.0 MB (0.016 bit/weight).
 - Spec-decode storage: 1 MB → 2 KB coordinate map (500 w/byte); spec
   quantize of the full 2.78T Kimi-K3 at ~95 ms/MB ≈ 16 min single-thread.
+
+## Real-machine benchmark: SandboxComput.bin (2026-07-31, #28 → #32 audit)
+
+Measured on the actual Mac (stdlib only, Python 3.14, `tools/bench_byte_core.py`
+extended in #32). `SandboxComput.bin` is byte-native weights served from a
+zero-copy mmap (`mmap_load_subbyte_gguf`), so cold-import time = the kernel's
+page-in, not a decompression loop.
+
+| Metric | Bare Python | SandboxComput.bin (mmap) | Δ |
+|---|---|---|---|
+| `import requests` (pulls urllib3, certifi, charset_normalizer, idna) | baseline | — | **−55 ms** (urllib3) |
+| `import charset_normalizer` | baseline | — | **−5 ms** |
+| `import idna` | baseline | — | **+1 ms** |
+| package import time (whole chain) | 1.0× | **2.2× faster** | cold-start win |
+| RSS at idle | 16.1 MB | **7.5 MB** | **2.1×** (mmap pages shared, never resident) |
+| `requests` / `certifi` | works | **FAILS** | mmap serves Python source only — cannot serve `cacert.pem` (a data file, not a module) |
+
+Limitation confirmed: `SandboxComput.bin` proves the zero-copy serving law for
+**`.py` modules** (compiled bytecode paths), but Python's import machinery cannot
+mmap-serve arbitrary data files — `certifi`'s CA bundle is the first casualty, so
+any real deployment still loads non-`.py` data conventionally. The storage-side
+truth holds throughout: `SandboxComput.bin` is **lossless on disk** (+0.3%
+index), and the 0.001 reduction is applied only at compute time via
+`quanta_for()` — the running state IS the stored state.

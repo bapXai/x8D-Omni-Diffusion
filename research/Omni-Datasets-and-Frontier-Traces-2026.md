@@ -275,7 +275,132 @@ DiffusionGemma parameter counts corrected from the earlier 26B/4B estimate to th
 
 ---
 
-## 8. Sources
+## 8. Newly-requested corpora (2026-07-31 expansion, issue #33)
+
+Status: verified 2026-07-31 against the HF datasets-server API (`/splits` + `/size`
+endpoints) and the NVIDIA collection API (`/api/collections/...`). Row counts are
+from the live datasets-server, which supersedes any older card numbers in §2–§4.
+Every corpus below imports through `omni_diffusion/x8d_dataset.py` — datasets-server
+API → flat raw bytes (UTF-8 / pixel / PCM / little-endian numerics) → `X8DDS` stream
+→ 8×8 DSpark block compression → `<name>.x8dds.gguf` + `manifest.json`, **lossless
+roundtrip, threshold 0.001** — then stages to the HF model repo
+(`hf upload bapX/x8D-Omni-Diffusion ./staged_dir/ .`).
+
+### 8.1 NVIDIA Nemotron collections (official, verified)
+
+NVIDIA's post-training data is now organized as one collection per capability
+(collection URLs below; some repos are gated and need HF login before datasets-server
+serves them — mark those `gated`).
+
+| Collection (URL) | Key datasets (verified rows) | Modality | Notes |
+|---|---|---|---|
+| [nemotron-agentic-and-tool-use](https://huggingface.co/collections/nvidia/nemotron-agentic-and-tool-use) | `Nemotron-SFT-Agentic-v2`, `Nemotron-Agentic-v1` (335,122), `Nemotron-RL-Agentic-Conversational-Tool-Use-Pivot-v1` (4,120), `Nemotron-RL-Agentic-Function-Calling-Pivot-v1` (1,190), `Nemotron-RL-Agentic-SWE-Pivot-v1` (3,660), `Nemotron-RL-agent-calendar_scheduling` (4,010), `Nemotron-RL-agent-workplace_assistant` (1,840), `Nemotron-SFT-ARC-AGI-v1` (2,785), `Nemotron-RL-Agentic-Indirect-Prompt-Injection-v1` (964) | UTF-8 JSONL tool calls | function-calling + multi-step agent pivots; the RL pivots are our tool-call policy SFT byte traffic |
+| [nemotron-chat-and-instruction-following](https://huggingface.co/collections/nvidia/nemotron-chat-and-instruction-following) | `Nemotron-SFT-Instruction-Following-Chat-v3` (682,491), `Nemotron-SFT-Multilingual-v2` (370,081), `Nemotron-RL-instruction_following-structured_outputs` (9,949), `Nemotron-RL-Identity-Following-v1` (21,660), `Nemotron-RL-Instruction-Following-MultiTurnChat-v1` (2,011), `Nemotron-RL-Instruction-Following-Calendar-v2` (9,915), `Nemotron-RL-CFBench-v1` (1,121), `Nemotron-RL-Multichallenge-v1` (2,118), `Nemotron-RL-InverseIFEval-v1` (1,000), HelpSteer3 (132,937) | UTF-8 chat bytes | v3 = the current SFT tier; HelpSteer3 also appears under reward-modeling |
+| [nemotron-code-and-swe](https://huggingface.co/collections/nvidia/nemotron-code-and-swe) | `Nemotron-SFT-OpenCode-v1` (459K), `Nemotron-SFT-SWE-v3` (3,526), `Nemotron-SFT-SWE-v2`, `Nemotron-SWE-v1` (1,391), `Nemotron-SFT-Competitive-Programming-v2`, `Nemotron-RL-coding-competitive_coding` (1,463), `Nemotron-Cascade-RL-SWE` / `-SFT-SWE`, `Nemotron-SFT-CUDA-v1` (566), pretraining: `Nemotron-Pretraining-Code-v1` (935M), `-v2` (836M), `Nemotron-CC-Code-v1` (216M, gated) | UTF-8 code bytes | the whole code/SWE ladder, SFT→RL→pretraining |
+| [nemotron-math-and-reasoning](https://huggingface.co/collections/nvidia/nemotron-math-and-reasoning) | `Nemotron-Math-v2` (7,085,839), `Nemotron-Math-Proofs-v1` (924,942) / `-v2` (55,577), `Nemotron-PrismMath` (1,002,595), `Nemotron-Research-GooseReason-0.7M` (673,125), `AceReason-1.1-SFT` (3,958,018), `AceReason-Math` (49,585), `OpenMathReasoning` (5,678,317), `OpenMathInstruct-1` (6,078,712), `OpenMathInstruct-2` (21,972,791), `Nemotron-CC-Math-v1` (189M, gated-auto), `Nemotron-Cascade-RL-Math` (14,476), `Nemotron-RL-Math-v2` (7,732) | UTF-8 math bytes | OpenMathReasoning = AIMO-2 winning-recipe SFT; Nemotron-CC-Math paper arXiv:2508.15096 |
+| [nemotron-terminal](https://huggingface.co/collections/nvidia/nemotron-terminal) | `Nemotron-Terminal-Corpus` (366,154 across 4 configs: `dataset_adapters` 226,313, `skill_based_easy` 44,809, `skill_based_medium` 89,343, `skill_based_mixed` 5,689), `Nemotron-Terminal-Synthetic-Tasks`, models `Nemotron-Terminal-8B/14B/32B` | UTF-8 terminal sessions | **terminal-bench-style byte traffic** — command output + error + retry loops; imports with `--config dataset_adapters` etc. |
+| [nemotron-reward-modeling](https://huggingface.co/collections/nvidia/nemotron-reward-modeling) | HelpSteer (37,120), HelpSteer2 (21,362), HelpSteer3 (132,937), `Nemotron-RLHF-GenRM-v1` (199,267), `Nemotron-Cascade-RM-Training` (81,808), `Nemotron-Cascade-RL-RLHF` (45,882) | UTF-8 preference bytes | human + generative reward-modeling signal; GenRM = Sol-style model-judge signal in NVIDIA form |
+| [nemotron-pre-training-datasets](https://huggingface.co/collections/nvidia/nemotron-pre-training-datasets) | `Nemotron-CC-v2` (8,793,738,251), `Nemotron-CC-v2.1` (3,800,016,491, gated-manual), `Nemotron-Pretraining-Specialized-v1.2` (599,514,257), `Nemotron-Pretraining-Code-v3` (146,323,609), `Nemotron-Pretraining-SFT-v1` (299,245,017), `Nemotron-Pretraining-Legal-v1` (9,616,568), `Nemotron-Pretraining-Dataset-sample` (27,706) | UTF-8 bytes | Tier-0-scale common-crawl dedup; most `gated` (HF login) |
+| [nemotron-rag](https://huggingface.co/collections/nvidia/nemotron-rag) | models: `llama-nemotron-embed-vl-1b-v2`, `llama-nemotron-rerank-vl-1b-v2`, `omni-embed-nemotron-3b`, `NVIDIA-Nemotron-Parse-v1.2` | embedding/rerank models, not SFT data | reference for RAG evals; no training-bytes value on its own |
+| [nemotron-personas](https://huggingface.co/collections/nvidia/nemotron-personas) | `Nemotron-Personas-USA` (1,000,000 rows / 6M personas), `-India` (3,000,000 / 21M; Hindi Devanagari + Latin + Indian English), `-Japan` (1,000,000), `-Korea` (1,000,000 / 7M), `-Brazil` (1,000,000), `-France` (1,000,000), `-Singapore` (148,000), `-El-Salvador` (148,000), `-Vietnam` (100,000), `-Belgium` (1,200,000) | UTF-8 persona bytes | synthetic persona *seeds* for the tool-use/user-sim datasets; `-India` is byte-script-diverse (see §4.2's byte-advantage argument) |
+| [opencodereasoning](https://huggingface.co/collections/nvidia/opencodereasoning) + [opencodereasoning-ii](https://huggingface.co/collections/nvidia/opencodereasoning-ii) | `nvidia/OpenCodeReasoning` (752,713; paper arXiv:2504.01943), `nvidia/OpenCodeReasoning-2` (2,164,812 total: `python` ≈1,422,489 + `cpp` ≈742,323; 4.38 GB parquet) | UTF-8 code bytes | question–solution–**critique** triples + execution pass rates; v2 is the biggest reasoning dataset of its kind |
+| [openmath](https://huggingface.co/collections/nvidia/openmath) | `OpenMathInstruct-1` (6,078,712), `OpenMathInstruct-2` (21,972,791), `OpenMathReasoning` (5,678,317), `OpenMath-GSM8K-masked` (7,473), `OpenMath-MATH-masked` (7,500) | UTF-8 math bytes | the OpenMath family of instruction-tuning + RL-ready math |
+| [openmathreasoning](https://huggingface.co/collections/nvidia/openmathreasoning) | `OpenMathReasoning` (5,678,317) + fine-tuned `OpenMath-Nemotron-*` models | UTF-8 math bytes | AIMO-2 winning solution dataset (paper arXiv:2504.16891) |
+| [physical-ai](https://huggingface.co/collections/nvidia/physical-ai) | `PhysicalAI-Autonomous-Vehicles-NuRec`, `PhysicalAI-Autonomous-Vehicles` (gated-auto), `PhysicalAI-Robotics-GR00T-X-Embodiment-Sim` (1,121,947), `PhysicalAI-Robotics-GR00T-Teleop-Sim` (5,820,277), `PhysicalAI-Robotics-GR00T-Teleop-GR1` (7,553,609), `PhysicalAI-WorldModel-Synthetic-Physical-Interaction-Scenes` (156,461,194), `PhysicalAI-WorldModel-Synthetic-Digital-Human-Scenes`, `-Autonomous-Driving-Scenarios`, `-Warehouse-Operations-Scenes`, `PhysicalAI-Robotics-Locomanipulation-GRAIL` (2,002), `PhysicalAI-VANTAGE-Bench` (3,276), `PhysicalAI-GR00T-Tuned-Tasks` (532,206), `LIBERO_LeRobot_v3` (848,441), `GR00T-N1.7-AppleToPlate` (171,625) | pixel/PCM/3DGS/action bytes | Tier-1 world-sim/3D; NuRec is 3DGS (`usdz`+`xodr`); GR00T teleop = video+action streams, all bytes at ids 0–255 |
+| [nvidia-omnidreams](https://huggingface.co/collections/nvidia/nvidia-omnidreams) | `nvidia/omni-dreams-samples` (66 rows, gated-auto), `nvidia/omni-dreams-scenes` (gated-auto), `nvidia/omni-dreams-models` (gated-auto, image-to-video) | video/pixel bytes | OmniDreams staging data (arXiv:2606.03159, see §3.3) |
+
+`nvidia/Open-SWE-Traces` (already §3.1) confirmed live: **4 splits** =
+`{openhands, sweagent} × {minimax_m25, qwen35_122b}` — import one agent family at a
+time to control dedup/contamination; the 207,489-trajectory count stands.
+
+### 8.2 sarvamai (expanded, all verified via datasets-server)
+
+| Dataset | Verified rows / configs | Notes |
+|---|---|---|
+| `sarvamai/indic-diarbench` | **22 language configs** (`Assamese`, `Bengali`, `Bodo`, `Dogri`, `Gujarati`, `Hindi`, `Kannada`, `Kashmiri`, `Konkani`, `Maithili`, `Malayalam`, `Manipuri`, `Marathi`, `Nepali`, `Odia`, `Punjabi`, `Sanskrit`, `Santali`, `Sindhi`, `Tamil`, `Telugu`, `Urdu`), each a single `test` split; 1,164 rows / 12.06 GB total | **config = language**: `--dataset sarvamai/indic-diarbench --config Assamese` etc.; Assamese 27 / Bengali 104 / Bodo 29 rows; fields `audio`, `annotated_transcript` (speaker_id/transcript/start_time/end_time), `num_speakers`, `duration_seconds` — audio→PCM bytes + transcript→UTF-8 bytes (§4.1 diarization eval) |
+| `sarvamai/samvaad-hi-v1` | 101,476 rows, default config, `train` split, 202 MB | Hindi conversation/QA dataset |
+| `sarvamai/mmlu-indic` | 296,318 rows across 22 configs (`bn, en, gu, hi, kn, ml, mr, or, pa, ta, te` + `_roman`), `test`+`validation` | §4.1 mirror; native + romanized configs, 14,042 rows/language test |
+| `sarvamai/boolq-indic` | default config, `train` + `validation` | §4.1 mirror |
+| `sarvamai/arc-challenge-indic` | 22 configs (`bn, en, gu, hi, kn, ml, mr, or, pa, ta, te` + `_roman`), `test`+`validation` | §4.1 mirror |
+| `sarvamai/gsm8k-indic` | 21 configs (`bn, en, gu, hi, kn, ml, mr, or, pa, ta, te` + `_roman`), `test` | §4.1 mirror |
+| `sarvamai/trivia-qa-indic-mcq` | 11 configs (`bn, en, gu, hi, kn, ml, mr, or, pa, ta, te`), `validation` | §4.1 mirror |
+| `sarvamai/tatoeba-indic` | 32 configs (`asm, awa, ben, bho, brx, guj, hin, kan, kha, kok, lah, mai, mal, mar, mni, nep, ori, pan, pli, san, sat, snd, tam, tel, urd` + dev splits), `test`+`dev` | translation-sentence pairs |
+| `sarvamai/indivibe` | 4,840 rows (`chat` 2,200, `code` 880, `math` 880, `stem` 880), `test` | §4.1 new-Indic eval; LLM-as-judge pairwise |
+| `sarvamai/audiollm-evals` | 980 rows, default config, `train`, 213 MB | audio-LLM eval set (PCM bytes) |
+| `sarvamai/tts-general-benchmark` | 1,815 rows, default config, `train` | TTS eval, 11 langs, HQ + 8 kHz telephony |
+| `sarvamai/tts-robustness-benchmark` | 959 rows, default config, `train` | TTS robustness eval |
+| `sarvamai/olmOCR-Bench-English` | 1,258 rows, default config, `train`, 307 MB | OCR bench (image→text bytes) |
+| `sarvamai/sarvam-dub-benchmark-set` | 704 rows, default config, `train`, 83 MB | dubbing eval (audio+text) |
+
+All are `sarvamai/*` on HF — datasets-server `/rows` + `/parquet` endpoints serve
+them without the `datasets`/torch dependency, so `x8d_dataset.py` flattens every
+field (audio refs `audio[0].src/type`, UTF-8 transcripts, float timing) to raw bytes.
+
+### 8.3 ai4bharat (expanded, verified via HF API)
+
+| Dataset | Verified | Notes |
+|---|---|---|
+| `ai4bharat/sangraha` | 251B tokens / 22 langs (CC-BY-4.0) | §4.2 pretraining tier; per-lang table (hin 34.5B, tam 17.4B, guj 17.2B, …) |
+| `ai4bharat/indic-align` | Instruct 74.7M + Toxic 123K (14 langs, CC-BY-4.0) | §4.2 IFT + safety alignment |
+| `ai4bharat/IndicCorpV2` | monolingual pretraining corpora (ACL 2023) | IndicCorp v2 per-language corpora |
+| `ai4bharat/samanantar` | 49.6M En→Indic sentence pairs | §4.2 parallel corpus |
+| `ai4bharat/Aksharantar` | 26M transliteration pairs, 20 langs | script diversity (native ↔ romanized) |
+| `ai4bharat/IndicVoices` | 23.7K h audio / 51K speakers / 22 langs; 11,200 h transcribed | ASR bytes |
+| `ai4bharat/indicvoices_r` | 1,704 h TTS / 10,496 speakers / 22 langs | TTS bytes |
+| `ai4bharat/Rasa` | expressive TTS, ≥20 h/speaker | TTS bytes |
+| `ai4bharat/Kathbath` | 1,684 h labelled ASR, 12 langs | ASR bytes |
+| `ai4bharat/Shrutilipi` | 6,400 h ASR from AIR news, 12 langs | ASR bytes |
+| `ai4bharat/SeamlessAlign` + `NPTEL` | BhasaAnuvaad subsets (44,400 h speech translation, 13 langs) | AST bytes |
+| `ai4bharat/IndicContextEval` | 16,884 utterances / 55.93 h / 8 langs (arXiv:2606.19157) | audio-LLM context eval |
+| `ai4bharat/MILU` | 11 langs, 8 domains, 41 subjects (arXiv:2411.02538) | text eval (usable as byte-format reference) |
+| `ai4bharat/Svarah` | 9.6 h Indic-accented English ASR | §eval |
+| `ai4bharat/naamapadam` | NER, 11 langs (CC0) | §token eval |
+| `ai4bharat/IndicQuestionGeneration` (98K/lang), `IndicSentenceSummarization` (431K), `IndicHeadlineGeneration` (1.43M), `IndicParaphrase` (5.57M), `IndicWikiBio` (57K) | IndicNLG suite (arXiv:2203.05437) | NLG tasks, most CC-BY-NC (license-gated for training) |
+| `ai4bharat/IndicCOPA`, `ai4bharat/IndicQA`, `ai4bharat/IN22-Gen`, `ai4bharat/Bhasha-Abhijnaanam`, `ai4bharat/Rural_Women_ASR_v2`, `ai4bharat/ncert-bench-lite` | benchmark/test sets | eval-only byte-format references |
+
+### 8.4 Frontier trace corpora — computer use / tool use / omni & 3D
+
+Fable 5, GPT-5.6 Sol, and Opus 5 text/tool traces are covered in §2 (dedup rule:
+use one verifier-backed source + one canonical session dump; AGPL-3.0 CoT floor,
+CC-BY-4.0 for AlinCiocan/greghavens, permissive for NVIDIA). This subsection adds
+the adjacent trace families:
+
+- **Computer-use traces.** GPT-5.6 Sol's OSWorld 2.0 62.6% and AutomationBench
+  18.1% runs (§2.2) are the signal; the closest extractable bytes are the
+  greghavens/Manusagents Sol trajectories (screenshots + `call_…` tool-IDs +
+  `[IMG_START]`-wrappable pixel frames). No dedicated verified "computer-use-only"
+  frontier trace repo was found in this pass — apply the §2.1 dedup + permissive-
+  license gate if one appears (mirrors of mirrors are the norm).
+- **Tool-use / agentic traces.** NVIDIA's `Nemotron-Agentic-v1` + the
+  `nemotron-agentic-and-tool-use` RL pivots (§8.1) are the open, verified
+  equivalent; `Nemotron-SFT-OpenCode-v1` is the closest to greghavens' harness.
+- **Omni / world-sim / 3D.** The `physical-ai` + `nvidia-omnidreams` collections
+  (§8.1) carry NuRec 3DGS (`usdz`/`xodr`), GR00T teleop video+action, and
+  world-model synthetic scenes — all pixel/PCM/3DGS bytes at ids 0–255 for
+  Tier-1 world-sim SFT; `PhysicalAI-WorldModel-Synthetic-Physical-Interaction-Scenes`
+  alone is 156M rows.
+
+Unverified in this pass (flag before use): a clean **Claude Opus 5** trace release
+(still only Opus 4.5/4.6/4.7 on HF), a dedicated frontier **computer-use** trace
+repo, and any permissive-licensed **Fable-5/Sol video** corpus.
+
+### 8.5 Import + byte-native notes (uniform)
+
+- Every repo above flows through `tools/import_hf_dataset.py --dataset <id> [--config <cfg>]`
+  → `omni_diffusion/x8d_dataset.py` → `.x8dds.gguf`. `--config` is forwarded as the
+  datasets-server config name — for `sarvamai/indic-diarbench` it is the language
+  (`Assamese`, `Bengali`, `Bodo`, …), for `nvidia/Nemotron-Terminal-Corpus` it is
+  the corpus split (`dataset_adapters`, `skill_based_easy`, …).
+- Gated repos (most `Nemotron-*` pretraining, `omni-dreams-*`, `PhysicalAI-*` auto-
+  gated) need an HF token for datasets-server; offline tests in
+  `tests/test_x8d_dataset.py` cover identical code paths with synthetic data.
+- Lossless roundtrip is asserted in-repo (MAGIC `X8DDS`, threshold 0.001, 8×8
+  DSpark); the pointer-map serving law (`x8d_hf.py`/`moe_disk.py`) extends from
+  weights to these shards — a training step loads only the byte span it needs.
+
+---
+
+## 9. Sources
 
 - Anthropic: "Claude Fable 5 and Claude Mythos 5" (2026-06-09); Claude platform docs.
 - OpenAI: "GPT-5.6: Frontier intelligence…" + "Previewing GPT-5.6 Sol" (2026-07-09) — eval tables.

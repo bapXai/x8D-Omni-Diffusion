@@ -246,6 +246,23 @@ Implemented in `omni_diffusion/x8d_spec_decode.py` (pure stdlib, no torch).
   (sarvamai + ai4bharat Sangraha 251B tokens / IndicAlign 74.7M pairs). Tier 1
   adds NVIDIA Physical-AI / omni-dreams scenes + PhysicalAI-Autonomous-Vehicles-NuRec
   3DGS (pixel/PCM bytes at ids 0-255).
+- `sarvamai/indic-diarbench` imports via `--config <language>` (Assamese/Bengali/Bodo/...)
+  — the config argument IS the `load_dataset()` config argument (dataset_id +
+  language code, split defaults to the only split, `test`). Exercised through
+  `tools/import_hf_dataset.py --dataset sarvamai/indic-diarbench --config <lang>`;
+  validated for at least 3 configs (Assamese, Bengali, Bodo). Rows carry raw audio
+  references (`audio[0].src`/`type`), UTF-8 transcripts, and numeric timing fields;
+  all flatten to raw bytes at ids 0-255.
+- **NVIDIA corpus mapping** (via `tools/import_hf_dataset.py`, all byte-native):
+  `nvidia/Open-SWE-Traces` (configs `openhands`/`sweagent`, splits per agent family),
+  nemotron agentic/tool-use/terminal/RAG/reward-modeling/pretraining datasets,
+  `opencodereasoning` I + II, `openmath`, physical-ai `omni-dreams-samples`/`scenes`,
+  `nemotron-personas`, `code-and-swe`, `chat-and-instruction`, `math-and-reasoning`.
+  sarvamai (`indic-diarbench`, `samvaad-hi-v1`, `mmlu-indic`, `audiollm-evals`) and
+  ai4bharat (`sangraha` verified/synthetic/unverified, `samanantar`, `IndicVoices`, ...)
+  Indic corpora flow through the same `.x8dds.gguf` lossless import path.
+- All imports run through `tools/import_hf_dataset.py`; offline tests cover identical
+  code paths with synthetic data; live tests are network-gated.
 - **DiffusionGemma note: LANGUAGE IS ALSO DIFFUSION** —
   google/diffusiongemma-26B-A4B-it (Apache 2.0) proves text diffusion:
   canvas_length=256, entropy_bound sampler (diffusion_entropy_bound=0.1),
