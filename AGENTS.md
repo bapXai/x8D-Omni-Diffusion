@@ -61,8 +61,8 @@ Use DSpark-style semi-autoregressive speculative decoding for inference:
 The Hugging Face CLI (`hf`, v1.26.0) is installed and authenticated as **`bapX`**
 (`~/.hf-cli`, symlinked into `~/.local/bin`, token `oauth-bapX` auto-refreshes).
 
-The model lives in an HF **bucket**: `bapX/x8D-Omni-Diffusion`
-(https://huggingface.co/buckets/bapX/x8D-Omni-Diffusion). The bucket holds ONLY
+The model lives in an HF **model repo**: `bapX/x8D-Omni-Diffusion`
+(https://huggingface.co/bapX/x8D-Omni-Diffusion). The repo holds ONLY
 byte-native files — NO safetensors, NO `vocab.json`/`merges.txt`, NO BPE artifacts.
 
 ```bash
@@ -71,27 +71,28 @@ export PATH="/Users/getwinharris/.local/bin:$PATH"
 # Auth / identity
 hf auth whoami
 
-# List bucket contents
-hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree
+# List repo contents (recursive)
+hf models list bapX/x8D-Omni-Diffusion -R
 
-# Download a single file from the bucket
-hf buckets cp hf://buckets/bapX/x8D-Omni-Diffusion/config.json ./config.json
+# Download a single file from the repo
+hf cp hf://bapX/x8D-Omni-Diffusion/config.json ./config.json
 
-# Upload a local folder into the bucket (uploads/deletes/skips delta)
-hf buckets sync ./staged_dir/ hf://buckets/bapX/x8D-Omni-Diffusion
+# Upload a local file/folder into the repo (single commit)
+hf upload bapX/x8D-Omni-Diffusion ./config.json config.json
+hf upload bapX/x8D-Omni-Diffusion ./staged_dir/ .
 
-# Delete files from the bucket (e.g. old safetensors / BPE tokenizer files)
-hf buckets remove hf://buckets/bapX/x8D-Omni-Diffusion --recursive -y \
-  --include '*.safetensors' --include '*.safetensors.index.json' \
-  --include 'vocab.json' --include 'merges.txt' --include 'added_tokens.json' \
-  --include 'tokenizer_config.json' --include 'special_tokens_map.json' \
-  --include 'tokenization_dream.py'
+# Delete files from the repo (e.g. old safetensors / BPE tokenizer files)
+hf repos delete-files bapX/x8D-Omni-Diffusion \
+  '*.safetensors' '*.safetensors.index.json' \
+  'vocab.json' 'merges.txt' 'added_tokens.json' \
+  'tokenizer_config.json' 'special_tokens_map.json' \
+  'tokenization_dream.py'
 
-# Always dry-run before deleting
-hf buckets remove hf://buckets/bapX/x8D-Omni-Diffusion --recursive --dry-run ...
+# Always dry-run before deleting (list what would match first)
+hf models list bapX/x8D-Omni-Diffusion -R
 ```
 
-**Bucket rules (enforced):**
+**Model-repo rules (enforced):**
 1. NEVER upload `*.safetensors`, `vocab.json`, `merges.txt`, `added_tokens.json`,
    `tokenizer_config.json`, `special_tokens_map.json`, or `tokenization_dream.py`.
 2. `config.json` MUST be byte-native: `vocab_size=264`, `mask=256`, `pad=257`,
@@ -99,9 +100,9 @@ hf buckets remove hf://buckets/bapX/x8D-Omni-Diffusion --recursive --dry-run ...
 3. `generation_config.json` MUST use byte-native ids + `alg="entropy_bound"`,
    `steps=48`, `diffusion_entropy_bound=0.1`, `canvas_length=256`.
 4. Keep `byte_tokenizer.py`, `x8d_export.py`, `configuration_dream.py`, model code,
-   and README in the bucket; the model loads via `trust_remote_code=True`.
+   and README in the repo; the model loads via `trust_remote_code=True`.
 5. Source of truth for HF distribution is `omni_diffusion/models/dream/` + `x8d_export.py`
-   in this repo; sync those into the bucket.
+   in this repo; sync those into the model repo.
 
 ### Commits & Validation
 
@@ -118,33 +119,33 @@ gh run list --limit 5
 gh run view <run-id>
 ```
 
-### GitHub + HF Bucket Dual Commit
+### GitHub + HF Model Repo Dual Commit
 
 Every merged change that adds or changes byte-native artifacts
 (`omni_diffusion/` modules, `tools/`, `README`, `research/`) MUST ALSO be
-synced to the HF bucket `bapX/x8D-Omni-Diffusion`.
+synced to the HF model repo `bapX/x8D-Omni-Diffusion`.
 
 ```bash
 export PATH="/Users/getwinharris/.local/bin:$PATH"
 
-# Upload a local folder into the bucket (uploads/deletes/skips delta)
-hf buckets sync ./staged_dir/ hf://buckets/bapX/x8D-Omni-Diffusion
+# Upload a local folder into the repo (single commit)
+hf upload bapX/x8D-Omni-Diffusion ./staged_dir/ .
 
 # Or a single file
-hf buckets cp ./tools/import_hf_dataset.py hf://buckets/bapX/x8D-Omni-Diffusion
+hf upload bapX/x8D-Omni-Diffusion ./tools/import_hf_dataset.py tools/import_hf_dataset.py
 
 # Verify after sync
-hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree
+hf models list bapX/x8D-Omni-Diffusion -R
 ```
 
 **Dual-commit checklist:**
 1. Commit + push to GitHub; validate CI via `gh run list --limit 5`.
 2. Stage the byte-native artifacts into `staged_dir/`.
-3. `hf buckets sync` the staged folder to `bapX/x8D-Omni-Diffusion`.
-4. Verify with `hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree`.
+3. `hf upload bapX/x8D-Omni-Diffusion ./staged_dir/ .` the staged folder.
+4. Verify with `hf models list bapX/x8D-Omni-Diffusion -R`.
 
-The enforced bucket rules above still apply — never upload `*.safetensors`,
-`vocab.json`, `merges.txt`, or any BPE artifact; the bucket is byte-native only.
+The enforced repo rules above still apply — never upload `*.safetensors`,
+`vocab.json`, `merges.txt`, or any BPE artifact; the repo is byte-native only.
 
 ### Creating Issues
 
@@ -436,7 +437,7 @@ x8D-Omni-Diffusion/
 ```
 
 GitHub: https://github.com/bapXai/x8D-Omni-Diffusion (branch `main`, Pages CI).
-HF bucket: https://huggingface.co/buckets/bapX/x8D-Omni-Diffusion (byte-native only).
+HF model repo: https://huggingface.co/bapX/x8D-Omni-Diffusion (byte-native only).
 
 ---
 

@@ -25,7 +25,7 @@ all already inside our 256-state vocabulary. That makes corpus choice a question
    pixel+PCM bytes for world-sim behavior.
 2. **Serving** — every corpus above is imported through `omni_diffusion/x8d_dataset.py`
    (`block_compress_dataset` → `.x8dds.gguf`, 8×8 DSpark, threshold 0.001) and lives on
-   the HF bucket `bapX/x8D-Omni-Diffusion`; pointer-map/mmap serving (see `x8d_hf.py`,
+   the HF model repo `bapX/x8D-Omni-Diffusion`; pointer-map/mmap serving (see `x8d_hf.py`,
    `moe_disk.py`) extends from weights to dataset shards (Range-fetch only the shard span
    a training step / eval needs).
 3. **Sampler** — adopt DiffusionGemma's entropy-bound + 256-byte canvas block-autoregressive
@@ -196,7 +196,7 @@ Mapping to x8D (re-affirms `AGENTS.md` issues #2/#5/#6 and `DiffusionGemma.md` �
   accept low-entropy positions within budget, re-mask + regenerate the rest
   (`x8d_spec_decode.py` `_block_surrogate` → real confidence head when torch lands).
 - **Canvas = 256 bytes** (our `canvas_length=256`, `diffusion_entropy_bound=0.1` already in the
-  bucket `generation_config.json`). Block-autoregressive canvas commit is exactly our
+  repo `generation_config.json`). Block-autoregressive canvas commit is exactly our
   `mask_canvas`/`renoise_to_random_bytes` loop.
 - **MTP linkage** (`Depth-Context-Attention-Frameworks-2026.md` §4): DiffusionGemma's "15-20
   tokens per forward pass" is a *whole-canvas* draft; our MTP-style confidence head drafts and
@@ -223,7 +223,7 @@ Mapping to x8D (re-affirms `AGENTS.md` issues #2/#5/#6 and `DiffusionGemma.md` �
 **(b) Serving (byte-native, no tokenizer):**
 - Import every corpus through `omni_diffusion/x8d_dataset.py` (#25): datasets-server API →
   flat bytes → `X8DDS` stream → 8×8 DSpark block compression → `<name>.x8dds.gguf` +
-  `manifest.json`, staged to the HF bucket (`hf buckets sync`).
+  `manifest.json`, staged to the HF model repo (`hf upload bapX/x8D-Omni-Diffusion ./staged_dir/ .`).
 - **Pointer-map mmap extends to data**: with shards stored as mmap'd `.x8dds.gguf`, a training
   step or eval loads only the needed byte span — the same Range-fetch + `/0.001` reversal law
   that serves K3 weights (`x8d_hf.py`, `moe_disk.py`, `Kimi-K3-x8D-Pointer-Quantization.md`).
