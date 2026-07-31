@@ -299,6 +299,33 @@ the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.
 expert. Routing guarantees only the requested boundary's byte span is mmap'd +
 /0.001-reversed; boundaries are pairwise isolated by construction.
 
+**Colibrì deep-dive (#41, audited 2026-07-31 vs live upstream)** —
+`JustVugg/colibri` (pure-C `c/colibri.c`, 437 KB) runs GLM-5.2 (744B/40B MoE)
+in 25 GB RAM by treating VRAM/RAM/NVMe as one managed memory hierarchy —
+it does NOT compress the model (372 GB int4 stays on disk; 4 bit/weight).
+Mechanics verified in source: (1) ~370 GB NVMe staging; (2) ~19 MB coalesced
+`pread` into 16 KB-aligned slabs OR `COLI_MMAP=1` (`mmap PROT_READ MAP_SHARED`
++ `madvise(MADV_WILLNEED)` so the kernel page cache IS the cache); (3) MoE
+active-expert streaming (only ~40B/744B + ~11 GB disk reads/token cold);
+(4) `URING=1` io_uring, `O_DIRECT`, `COLI_NUMA=1` mbind interleave,
+`PIN_GB=N` mlock hot-store, per-layer LRU `ecache`, `DROP=1` madvise-evict,
+int8 MTP speculative head (int4 → 0% draft acceptance, #8); token-exact vs
+transformers oracle. Telemetry (`telemetry.h`): `g_prof_io` atomic byte
+counter, `hit_pin`/`hit_ecache` tier split, `getrusage` RSS, per-turn stats
+line, `iobench.c` drive probe. Measured: **0.05–0.1 tok/s cold** on 25 GB
+WSL2 (~1 GB/s VHDX); 0.07→0.11 with `--topp 0.7`; 1.06 tok/s M5 Max; 6.84
+tok/s 6×RTX-5090 full residency. **Why x8D wins**: Colibrì buys placement with
+a 372 GB footprint + SSD-bound decode; x8D compacts the matrix (0.008
+bit/weight → 1.56 TB → 2.837 GB) so the *file* is addressable, then uses the
+same mmap pointer-map for zero-copy live /0.001. Ported: `omni_diffusion/
+x8d_mmap.py` (`MappedX8DReader` = Colibrì `COLI_MMAP` over the sub-byte
+container: offset-index slice, zero-copy memoryview frames, live reverse) +
+`omni_diffusion/x8d_telemetry.py` (`Telemetry` = Colibrì `telemetry.h`:
+record_io/fault, RSS, per-8x8-block timing, pin/lru hits, dashboard line).
+Next steps: wire `MappedX8DReader` into `moe_disk.py` SARA spans; learned
+PIN hot-store from hit histograms; expose dashboard line via /healthz; publish
+like-for-like benchmark vs upstream. See `research/Colibri-Deep-Dive-2026.md`.
+
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a
   lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;
@@ -378,6 +405,8 @@ x8D-Omni-Diffusion/
 │   ├── x8d_subbyte.py                 # 0.016 bit/weight packed model (32MB=32GB)
 │   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter + pointer loader
 │   ├── x8d_dataset.py                 # [#25] HF datasets-server import -> 8x8 block-compressed .x8dds.gguf
+│   ├── x8d_mmap.py                    # [#41] zero-copy mmap frame reader over .gguf/.x8dds.gguf
+│   ├── x8d_telemetry.py               # [#41] per-8x8-block I/O + RSS telemetry (Colibrì port)
 │   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
 │   │
 │   ├── data/
@@ -422,6 +451,7 @@ x8D-Omni-Diffusion/
 │   ├── Frontier-Benchmarks-2026.md    # [#15] x8D vs GPT-5.6/K3/Opus5/V4/... + arch deep-dive
 │   ├── Omni-Datasets-and-Frontier-Traces-2026.md  # [#25/#26] NVIDIA/sarvamai/ai4bharat + Fable5/Sol traces + DiffusionGemma
 │   └── Depth-Context-Attention-Frameworks-2026.md  # [#24] AttnRes/KDA/mHC/Engram/CLVR + x8D map
+│   └── Colibri-Deep-Dive-2026.md      # [#41] JustVugg/colibri 24GB-GLM-5.2 audit + mmap/telemetry port
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup
@@ -444,6 +474,8 @@ x8D-Omni-Diffusion/
 │   ├── test_pointer_quantize.py       # [#10] Kimi-K3 pointer map + forward-identical
 │   ├── test_quantize_hf.py            # [#17] generic HF pointer quantizer
 │   ├── test_x8d_dataset.py            # [#25] HF dataset import + block-compress
+│   ├── test_x8d_mmap.py               # [#41] zero-copy mmap frame reader (Colibrì COLI_MMAP port)
+│   ├── test_x8d_telemetry.py          # [#41] per-8x8-block I/O + RSS telemetry (Colibrì telemetry.h port)
 │   └── (test_moe_disk.py)             # [#9] planned
 │
 └── tools/
