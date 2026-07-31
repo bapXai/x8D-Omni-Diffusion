@@ -186,3 +186,53 @@ def convert_remote_span(
 def parse_safetensors_header(header_bytes: bytes) -> Dict[str, Dict[str, object]]:
     """Parse a safetensors JSON header (from the first 8+N bytes)."""
     return json.loads(header_bytes.decode("utf-8"))
+
+
+def load_pointer_map(
+    repo_id: str,
+    pointer_file: str,
+    local_path: Optional[str] = None,
+    token: Optional[str] = None,
+) -> Dict[str, dict]:
+    """Load an X8DPTR01 pointer map from an HF repo (or a local file).
+
+    The pointer map IS the compressed model: name -> {repo, shard, begin,
+    end, dtype, shape}. Weight bytes stay on the upstream disk; only the
+    requested span is fetched and /0.001-reversed live at query time.
+
+    Args:
+        repo_id: HF repo id hosting the pointer .gguf.
+        pointer_file: file name in the repo (e.g. "x8d_weights/kimi_k3.x8dptr.gguf").
+        local_path: optional local file to read instead of fetching.
+        token: HF bearer token for private repos.
+
+    Returns:
+        name -> pointer record dict.
+    """
+    import urllib.request
+
+    if local_path is not None:
+        data = open(local_path, "rb").read()
+    else:
+        url = f"https://huggingface.co/{repo_id}/resolve/main/{pointer_file}"
+        req = urllib.request.Request(url)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
+            data = resp.read()
+
+    PTR_MAGIC = b"X8DPTR01"
+    if not data.startswith(PTR_MAGIC):
+        raise ValueError(f"Not an X8DPTR01 pointer container: {pointer_file}")
+    out: Dict[str, dict] = {}
+    pos = len(PTR_MAGIC)
+    while pos < len(data):
+        (name_len,) = struct.unpack_from("<I", data, pos)
+        pos += 4
+        name = data[pos : pos + name_len].decode("utf-8")
+        pos += name_len
+        (rec_len,) = struct.unpack_from("<Q", data, pos)
+        pos += 8
+        out[name] = json.loads(data[pos : pos + rec_len].decode("utf-8"))
+        pos += rec_len
+    return out
