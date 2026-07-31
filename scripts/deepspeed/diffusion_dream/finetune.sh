@@ -17,7 +17,7 @@ fi
 
 ######################################################################
 export ROOT_PATH=/data/
-export CODE_PATH=${ROOT_PATH}/Omni-Diffusion/
+export CODE_PATH=${ROOT_PATH}/x8D-Omni-Diffusion/
 
 cd ${CODE_PATH}
 
@@ -50,7 +50,7 @@ echo ${@}
 ######################################################################
 DATA_PATH=${CODE_PATH}/configs/finetune.yaml
 
-MODEL_NAME_OR_PATH="../models/Omni-Diffusion"
+MODEL_NAME_OR_PATH="../models/x8D-Omni-Diffusion"
 AUDIO_TOKENIZER_PATH="../models/THUDM/glm-4-voice-tokenizer"
 AUDIO_MODEL_NAME_OR_PATH="../models/FunAudioLLM/SenseVoiceSmall/model.pt"
 IMAGE_TOKENIZER_PATH="../models/magvitv2"

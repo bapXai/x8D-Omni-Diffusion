@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Modify from https://github.com/VITA-MLLM/VITA-Audio/blob/main/evaluation/compute-wer.py
+# Modify from https://github.com/bapXai/VITA-Audio/blob/main/evaluation/compute-wer.py
 
 import re, sys, unicodedata
 import codecs

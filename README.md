@@ -1,8 +1,8 @@
-# Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion
+# x8D-Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion
 
-<font size=3><div align='center' > [[🌐 Homepage](https://omni-diffusion.github.io)] [[📖 Paper](https://arxiv.org/abs/2603.06577)] [[🤗 Model Weight](https://huggingface.co/lijiang/Omni-Diffusion)]</div></font>
+<font size=3><div align='center' > [[🌐 Homepage](https://bapxai.github.io/x8D-Omni-Diffusion)] [[🤗 Model Weight](https://huggingface.co/bapx/x8D-Omni-Diffusion)]</div></font>
 
-This repository hosts code of **Omni-Diffusion**, the first any-to-any multimodal language model build on a mask-based discrete diffusion model. By modeling a joint distribution over discrete tokens of text, images, and speech, Omni-Diffusion exhibiting strong capability in multimodal comprehension and generation.
+This repository hosts code of **x8D-Omni-Diffusion**, the first any-to-any multimodal language model build on a mask-based discrete diffusion model. By modeling a joint distribution over discrete tokens of text, images, and speech, x8D-Omni-Diffusion exhibiting strong capability in multimodal comprehension and generation.
 <p align="center">
     <img src="asset/teaser.png" width="95%" height="60%">
 </p>
@@ -31,8 +31,8 @@ This repository hosts code of **Omni-Diffusion**, the first any-to-any multimoda
 ### Prepare Environment
 ```
 docker pull shenyunhang/pytorch:24.11-py3_2024-1224
-git clone https://github.com/VITA-MLLM/Omni-Diffusion.git
-cd Omni-Diffusion
+git clone https://github.com/bapXai/x8D-Omni-Diffusion.git
+cd x8D-Omni-Diffusion
 git submodule update --init --recursive
 pip install -r requirements_ds_gpu.txt
 pip install -e .
@@ -40,10 +40,10 @@ pip install -e .
 
 ### Prepare Pre-trained Weight
 
-#### Omni-Diffusion
+#### x8D-Omni-Diffusion
 
-- Download the Omni-Diffusion from https://huggingface.co/lijiang/Omni-Diffusion.
-- Put it into '../models/Omni-Diffusion'
+- Download the x8D-Omni-Diffusion from https://huggingface.co/bapx/x8D-Omni-Diffusion.
+- Put it into '../models/x8D-Omni-Diffusion'
 
 #### Audio Encoder and Audio Decoder
 
@@ -262,10 +262,10 @@ Evaluate MME
 If you find our work helpful for your research, please consider citing our work.   
 
 ```bibtex
-@article{li2026omni,
-  title={Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion},
-  author={Li, Lijiang and Long, Zuwei and Shen, Yunhang and Gao, Heting and Cao, Haoyu and Sun, Xing and Shan, Caifeng and He, Ran and Fu, Chaoyou},
-  journal={arXiv preprint arXiv:2603.06577},
+@misc{x8domni2026,
+  title={x8D-Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion},
+  author={getwinharris},
+  howpublished={https://bapx.in},
   year={2026}
 }
 ```

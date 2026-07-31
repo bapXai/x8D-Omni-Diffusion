@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>x8D-Omni-Diffusion</title>
+<meta name="description" content="x8D-Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #0b0f19;
+    color: #e6e9f0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: clamp(2.2rem, 6vw, 4rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(120deg, #7c8cff, #b56cff, #ff6cd2);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.75rem;
+  }
+  p.tagline {
+    font-size: clamp(1rem, 2.5vw, 1.35rem);
+    color: #9aa4b8;
+    max-width: 46rem;
+    line-height: 1.55;
+    margin-bottom: 2.5rem;
+  }
+  .links { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
+  .links a {
+    display: inline-block;
+    padding: 0.8rem 1.6rem;
+    border-radius: 999px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 1rem;
+    border: 1px solid #2b3650;
+    color: #e6e9f0;
+    background: #141a2b;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .links a.primary {
+    background: linear-gradient(120deg, #6b7bff, #b56cff);
+    border-color: transparent;
+    color: #fff;
+  }
+  .links a:hover { transform: translateY(-2px); border-color: #7c8cff; }
+  footer {
+    margin-top: 3.5rem;
+    font-size: 0.85rem;
+    color: #5c6580;
+  }
+  footer a { color: #7c8cff; text-decoration: none; }
+</style>
+</head>
+<body>
+  <h1>x8D-Omni-Diffusion</h1>
+  <p class="tagline">
+    Unified Multimodal Understanding and Generation with Masked Discrete Diffusion.
+    An any-to-any multimodal language model modeling a joint distribution over
+    discrete tokens of text, images, and speech.
+  </p>
+  <div class="links">
+    <a class="primary" href="https://huggingface.co/bapx/x8D-Omni-Diffusion" target="_blank" rel="noopener">Model Weights</a>
+    <a href="https://github.com/bapXai/x8D-Omni-Diffusion" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <footer>
+    by <a href="https://github.com/getwinharris" target="_blank" rel="noopener">@getwinharris</a> &middot; from <a href="https://bapx.in" target="_blank" rel="noopener">bapx.in</a>
+  </footer>
+</body>
+</html>

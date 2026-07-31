@@ -7,7 +7,7 @@ timestamp=test_librispeech
 
 ######################################################################
 export ROOT_PATH=/data/
-export CODE_PATH=${ROOT_PATH}/Omni-Diffusion/
+export CODE_PATH=${ROOT_PATH}/x8D-Omni-Diffusion/
 
 ######################################################################
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
