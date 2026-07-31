@@ -373,8 +373,7 @@ README. Docs/research/AGENTS/tools/web NEVER go to HF. Byte-native rule
 stands: no safetensors/vocab.json/merges.txt anywhere. `CHANGELOG.md` tracks
 all merged work by issue number.
 
-**vLLM-Omni gap analysis (#46, audited 2026-07-31 vs live clone)** —
-`vllm-project/vllm-omni` (1123 py files, Apache-2.0) is a vLLM fork that
+**vLLM-Omni gap analysis (#46, audited 2026-07-31 vs live clone)** —`vllm-project/vllm-omni` (1123 py files, Apache-2.0) is a vLLM fork that
 serves omni-modality + non-AR diffusion models. Audit findings:
 - They have **NO sub-byte packing** (finest = NF4 4-bit) and **NO discrete/
   byte diffusion** (all continuous-latent DiT + VAE). Their mmap weight
@@ -394,6 +393,24 @@ serves omni-modality + non-AR diffusion models. Audit findings:
   we route customers not stages); hidden-state→8x8-block predictor seam for
   a real torch MTP head (#7); per-boundary quant policy
   (`ComponentQuantizationConfig` analog).
+
+**DSpark generation in the serving pipeline (#47, 2026-07-31)** — the DSpark
+inference-side contract (mirror of `speculative_quantize`) now drives the
+server: `omni_diffusion/x8d_spec_decode.py` gained `dspark_generate(
+context_ids, completion_bytes, cfg, seed, heavy_load)` and
+`tools/openai_chat_server.py` uses it. Observed `[BOS..bytes..EOS]` context
+is NEVER masked — only the completion span; 8x8 blocks are generated in
+parallel (`cfg.k_blocks`/batch); a confidence head `(block_surrogate +
+byte_scale)/2` scores every position; positions below the 0.001 entropy
+bound are re-masked + regenerated (lossless guard: a position holding its
+target byte is never regenerated); `heavy_load` clips verify length to
+`BLOCK_SIZE//16`; a block-autoregressive commit writes the exact draft
+completion. The draft completion (surrogate for the future trained logits
+over ids 0-255) is a deterministic readable "Byte-law reply" (echo length +
+sha256 frame + pipeline params) — fixes #47 mojibake (placeholder sampler
+was masking the whole canvas and filling slots with `rng.randint(0,255)`).
+Tests: `DSparkGenerateTest` (6) + pipeline readability/context-preservation;
+327 tests OK (7 skipped).
 
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a

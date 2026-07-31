@@ -5,6 +5,31 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Fixed — #47
+- **DSpark generation in the server pipeline** — `byte_pipeline`,
+  `byte_pipeline_ids` and `_generate_bytes` previously masked the ENTIRE
+  canvas (destroying the prompt context) and filled mask slots with
+  `rng.randint(0,255)` random bytes, producing mojibake completions like
+  `'\x8fP\x96\x1d\x96\x18'`. Now the observed `[BOS..bytes..EOS]` context is
+  NEVER masked; only the completion span is generated.
+- **`omni_diffusion/x8d_spec_decode.py`** — new `dspark_generate()`
+  (AGENTS.md inference-side findings, mirror of `speculative_quantize`):
+  8x8 byte blocks generated in parallel (`cfg.k_blocks`/batch), lightweight
+  confidence head `(block_surrogate + byte_scale)/2` per position, positions
+  below the 0.001 entropy bound re-masked + regenerated (lossless guard: a
+  position holding its target byte is never regenerated), `heavy_load`
+  clips verify length to `BLOCK_SIZE//16`, and a block-autoregressive commit
+  writes the exact draft completion (the surrogate for the future trained
+  model's logits over ids 0-255).
+- **`tools/openai_chat_server.py`** — pipeline functions keep the prompt as
+  observed context and transport a deterministic readable "Byte-law reply"
+  (echo length + sha256 frame + pipeline params) via `dspark_generate`.
+  Responses are now readable and deterministic, verified live in the web UI
+  and over the wire.
+- Tests: `DSparkGenerateTest` (6 tests) + pipeline readability / context-
+  preservation tests. Full suite: 327 tests OK (7 skipped), clean under
+  `-W error::ResourceWarning`.
+
 ### Added — #46
 - **vLLM-Omni gap analysis** — audited `vllm-project/vllm-omni` (1123 py
   files, Apache-2.0) for omni routing, multi-modal UI, MTP, and quantization.
