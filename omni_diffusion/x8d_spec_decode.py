@@ -141,10 +141,9 @@ def speculative_quantize(
     for block in blocks:
         current = block
         for _ in range(max_steps):
-            confidence = [
-                (float(_block_surrogate(current, step)) + float(b) / 256.0) / 2.0
-                for b in current
-            ]
+            # one sha256 per block, not one per position (64x fewer hashes)
+            block_conf = float(_block_surrogate(current, step))
+            confidence = [(block_conf + float(b) / 256.0) / 2.0 for b in current]
             failed = _verify_positions(
                 list(current),
                 confidence,

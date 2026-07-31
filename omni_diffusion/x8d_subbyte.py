@@ -181,6 +181,9 @@ class SubByteModel:
     pointer lookup so no decompression loop ever executes.
     """
 
+    #: Precomputed inverse pointer map: coordinate byte -> running weight byte.
+    _WEIGHT_LUT: Tuple[int, ...] = tuple(weight_of(i) for i in range(256))
+
     def __init__(self, filename: str):
         self.mapping, self.meta = mmap_load_subbyte_gguf(filename)
         self._payload_offset = 0
@@ -200,13 +203,21 @@ class SubByteModel:
     def weight_at(self, index: int) -> int:
         """Running weight byte for parameter ``index`` via the pointer map."""
         coord = self._packed[index // WEIGHTS_PER_COORD]
-        return weight_of(coord)
+        return self._WEIGHT_LUT[coord]
 
     def weights(self, start: int = 0, end: Optional[int] = None) -> List[int]:
         """Slice of running weight bytes."""
         if end is None:
             end = self._n
-        return [self.weight_at(i) for i in range(start, end)]
+        # C-speed: translate coordinate bytes -> running weight bytes in bulk.
+        packed = self._packed
+        wpb = WEIGHTS_PER_COORD
+        first = start // wpb
+        last = (end - 1) // wpb + 1
+        coords = bytes(packed[first:last]).translate(bytes(self._WEIGHT_LUT))
+        out = b"".join(bytes([v]) * wpb for v in coords)
+        head = start - first * wpb
+        return list(out[head : head + (end - start)])
 
     def close(self) -> None:
         """Release the memory map."""

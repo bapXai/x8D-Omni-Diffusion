@@ -80,6 +80,35 @@ class SubBytePackingTest(unittest.TestCase):
             if os.path.exists(tmp):
                 os.remove(tmp)
 
+    def test_weights_slices_match_weight_at(self):
+        """Bulk C-speed slice must equal per-index weight_at on every edge."""
+        import random
+
+        tmp = os.path.join(os.path.dirname(__file__), "_tmp_subbyte3.gguf")
+        random.seed(3)
+        data = bytes(random.getrandbits(8) for _ in range(1500))  # 3 coords
+        try:
+            path, _ = save_subbyte_gguf("model.weight", data, tmp)
+            model = SubByteModel(path)
+            ref = [model.weight_at(i) for i in range(len(data))]
+            self.assertEqual(model.weights(), ref)
+            for s, e in [
+                (0, 1),
+                (1, 2),
+                (499, 500),
+                (500, 501),
+                (123, 987),
+                (1200, 1500),
+                (1499, 1500),
+                (0, 500),
+                (0, 1500),
+            ]:
+                self.assertEqual(model.weights(s, e), ref[s:e], f"slice {s}:{e}")
+            model.close()
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
     def test_bad_magic_raises(self):
         tmp = os.path.join(os.path.dirname(__file__), "_tmp_bad.gguf")
         with open(tmp, "wb") as f:
