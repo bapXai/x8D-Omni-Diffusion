@@ -1,0 +1,27 @@
+# Byte-native core: ZERO external dependencies required.
+#
+# The byte-native stack (omni_diffusion/models/dream/byte_tokenizer.py,
+# omni_diffusion/x8d_export.py, and their tests) runs on pure Python stdlib.
+# No torch, no tokenizers, no BPE libs, no JAX/Flax/Optax.
+#
+# Everything below is OPTIONAL and belongs to the torch training stack only.
+# Verified 2026-07-31 against cactus-compute/needle's dependency audit
+# (research/Needle-Dependency-Audit.md).
+
+# --- Data / distribution ---------------------------------------------------
+huggingface_hub      # model + tokenizer download/upload for bapx/x8D-Omni-Diffusion
+datasets             # dataset loading (already used by omni_diffusion/data)
+pyyaml               # training configs (configs/finetune.yaml) -- justified vs needle
+
+# --- Compute (training only) -----------------------------------------------
+torch                # sole DL framework per AGENTS.md
+transformers==4.51.3 # config/tokenizer/trainer infra (NOT the byte tokenizer)
+
+# --- Optional ---------------------------------------------------------------
+wandb                # training logging only
+tqdm                 # progress bars
+google-genai         # optional: synthetic SFT data generation (Gemini)
+
+# --- Explicitly BANNED (byte law, AGENTS.md) --------------------------------
+# tiktoken / sentencepiece / tokenizers / jax / jaxlib / flax / optax
+# (needle's gcsfs + pyyaml: gcsfs was dead in needle; pyyaml kept here for our configs)
