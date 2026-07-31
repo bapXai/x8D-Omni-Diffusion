@@ -171,7 +171,9 @@ def mmap_load_subbyte_gguf(filename: str) -> Tuple[mmap.mmap, Dict[str, int]]:
     if mapping[: len(SUB_BYTE_MAGIC)] != SUB_BYTE_MAGIC:
         raise SubByteHeaderError("Not a valid sub-byte container")
     (num_params,) = struct.unpack("<Q", mapping[len(SUB_BYTE_MAGIC) : len(SUB_BYTE_MAGIC) + 8])
-    return mapping, {"num_params": num_params, "packed_size": file_size - 20}
+    (name_len,) = struct.unpack("<I", mapping[16:20])
+    packed_size = file_size - 20 - name_len
+    return mapping, {"num_params": num_params, "packed_size": packed_size}
 
 
 class SubByteModel:
@@ -201,20 +203,51 @@ class SubByteModel:
         return len(self._packed) / 1e6
 
     def weight_at(self, index: int) -> int:
-        """Running weight byte for parameter ``index`` via the pointer map."""
+        """Running weight byte for parameter ``index`` via the pointer map.
+
+        Args:
+            index: parameter index in ``[0, n)``.
+
+        Returns:
+            The reconstructed weight byte.
+
+        Raises:
+            IndexError: if ``index`` is out of range.
+        """
+        if index < 0 or index >= self._n:
+            raise IndexError(
+                f"weight_at({index}) out of range for {self._n}-param model"
+            )
         coord = self._packed[index // WEIGHTS_PER_COORD]
         return self._WEIGHT_LUT[coord]
 
     def weights(self, start: int = 0, end: Optional[int] = None) -> List[int]:
-        """Slice of running weight bytes."""
+        """Slice of running weight bytes in ``[start, end)``.
+
+        Args:
+            start: first parameter index.
+            end: exclusive end index (default ``len(model)``).
+
+        Returns:
+            Reconstructed weight bytes for the range.
+
+        Raises:
+            IndexError: if the range exceeds the model's parameter count.
+        """
         if end is None:
             end = self._n
+        if start < 0 or end > self._n or start > end:
+            raise IndexError(
+                f"weights({start}, {end}) out of range for {self._n}-param model"
+            )
+        if start == end:
+            return []
         # C-speed: translate coordinate bytes -> running weight bytes in bulk.
         packed = self._packed
         wpb = WEIGHTS_PER_COORD
         first = start // wpb
         last = (end - 1) // wpb + 1
-        coords = bytes(packed[first:last]).translate(bytes(self._WEIGHT_LUT))
+        coords = packed[first:last].translate(bytes(self._WEIGHT_LUT))
         out = b"".join(bytes([v]) * wpb for v in coords)
         head = start - first * wpb
         return list(out[head : head + (end - start)])

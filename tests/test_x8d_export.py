@@ -60,6 +60,26 @@ class GGUFContainerTest(unittest.TestCase):
         self.assertEqual(payloads["weights"], b"\x00\x01\xfe\xff")
         self.assertEqual(meta["law"], 0.001)
 
+    def test_save_int_list_payload_byte_identical(self):
+        path = self._tmpfile()
+        save_gguf({"w": [0, 128, 200, 255]}, path)
+        payloads, _ = load_gguf(path)
+        self.assertEqual(payloads["w"], bytes([0, 128, 200, 255]))
+
+    def test_save_quanta_float_payload_lossless(self):
+        path = self._tmpfile()
+        weights = bytes([0, 1, 64, 128, 200, 255])
+        quanta = quantize(weights)
+        save_gguf({"w": list(quanta)}, path)
+        payloads, _ = load_gguf(path)
+        self.assertEqual(payloads["w"], weights)
+
+    def test_save_empty_container(self):
+        path = self._tmpfile()
+        save_gguf({}, path)
+        payloads, _ = load_gguf(path)
+        self.assertEqual(payloads, {})
+
     def test_multi_payload(self):
         path = self._tmpfile()
         save_gguf({"a": b"\x01", "b": b"\x02\x03", "c": b"\x04\x05\x06"}, path)

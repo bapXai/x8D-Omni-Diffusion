@@ -302,14 +302,19 @@ def main() -> None:
     print(f"  reduction          : {r['reduction_pct']:.8f}%")
 
     if args.test_fetch:
+        from omni_diffusion.x8d_hf import expected_span_length
+
         sample = next(iter(pointers.values()))
         raw = serve_expert_from_pointer(sample, token=args.token)
-        # live /0.001 reverse on the fetched span == original bytes
-        quanta = [b * 0.001 for b in raw]
-        reversed_bytes = bytes(int(round(q / 0.001)) & 0xFF for q in quanta)
+        span_ok = len(raw) == sample["end"] - sample["begin"]
+        exp = expected_span_length(sample["shape"], sample["dtype"])
+        shape_ok = exp is None or exp == sample["end"] - sample["begin"]
         print(f"  test-fetch {sample['name']}: {len(raw)} B")
-        print(f"    stored-quanta==original: {raw == reversed_bytes}")
+        print(f"    span_len=={sample['end']-sample['begin']}: {span_ok}")
+        print(f"    shape*{sample['dtype']}==span_len: {shape_ok}")
         print(f"    dtype={sample['dtype']} shape={sample['shape']}")
+        if not (span_ok and shape_ok):
+            raise SystemExit("pointer verification FAILED")
 
 
 if __name__ == "__main__":

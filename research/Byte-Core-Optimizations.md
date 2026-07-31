@@ -39,7 +39,34 @@ boundary (500/501), mid, tail, single-byte, full-span slices.
 - `tests/test_subbyte.py` (8) + `tests/test_spec_decode.py` (11) pass.
 - Full suite: 78 tests OK (3 torch-skipped).
 
+## Round 2 (2026-07-31, issue audit #18-#23) — LUT/memo optimizations
+
+| Hot path | Before | After | Speedup |
+|---|---|---|---|
+| `quantize` (5.5 MB) | 235 ms | 116 ms | **2.0×** |
+| `to_u8` / `dequantize` (5.5 MB) | 346 ms | 286 ms | **1.2×** |
+| `speculative_quantize` (5.5 MB) | 705 ms | 523 ms | **1.35×** |
+| `MoEOnDisk.load_expert` (5.5 MB) | ~350 ms | 56 ms | **~6×** |
+
+What changed:
+- `x8d_export.py`: `_QUANTA_LUT` (256 precomputed `b*0.001` coordinates)
+  replaces per-element `float(b) & 0xFF` in `quantize`. `to_u8`/`dequantize`
+  share a memoizing generator (`_dequantized`) that computes
+  `round(q/LAW)` once per distinct coordinate (canonical quanta repeat).
+- `x8d_spec_decode.py`: per-byte confidence contribution `b/256` is now the
+  precomputed `_BYTE_SCALE` tuple; verification consumes the bytes block
+  directly (no per-block `list()` allocation).
+- `moe_disk.py`: `_REVERSE_LUT` makes the live `/0.001` reverse a LUT lookup
+  instead of per-element float round.
+
+Also fixed in the same pass (see issues #18-#23): `save_gguf` no longer
+corrupts non-bytes payloads; `mmap_load_subbyte_gguf` packed_size now
+excludes the name length; `size_mb()` returns a float; `decode` no longer
+wraps ids ≥512 into content bytes; pointer-map verification is no longer a
+tautology (span length + shape×dtype invariants); spec-decode output is
+length-preserving (no zero-padded tail).
+
 ## Scaling notes
 - 16B-param model: FP16 32.00 GB → x8D sub-byte 32.0 MB (0.016 bit/weight).
 - Spec-decode storage: 1 MB → 2 KB coordinate map (500 w/byte); spec
-  quantize of the full 2.78T Kimi-K3 at 136 ms/MB ≈ 23 min single-thread.
+  quantize of the full 2.78T Kimi-K3 at ~95 ms/MB ≈ 16 min single-thread.

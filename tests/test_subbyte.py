@@ -16,6 +16,7 @@ from omni_diffusion.x8d_subbyte import (  # noqa: E402
     SubByteHeaderError,
     coords_per_pack,
     load_subbyte_gguf,
+    mmap_load_subbyte_gguf,
     pack_subbyte,
     packed_size_bytes,
     print_size_report_subbyte,
@@ -59,6 +60,37 @@ class SubBytePackingTest(unittest.TestCase):
             payloads, meta = load_subbyte_gguf(path)
             self.assertEqual(meta["num_params"], len(data))
             self.assertEqual(len(payloads["model.weight"]), packed_len)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def test_mmap_packed_size_excludes_name_length(self):
+        tmp = os.path.join(os.path.dirname(__file__), "_tmp_subbyte_meta.gguf")
+        name = "a_very_long_tensor_name_for_testing"
+        data = os.urandom(1024)
+        try:
+            path, _ = save_subbyte_gguf(name, data, tmp)
+            mapping, meta = mmap_load_subbyte_gguf(path)
+            try:
+                self.assertEqual(meta["packed_size"], os.path.getsize(path) - 20 - len(name))
+            finally:
+                mapping.close()
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def test_mmap_bounds_checks(self):
+        tmp = os.path.join(os.path.dirname(__file__), "_tmp_subbyte_bounds.gguf")
+        data = bytes([200]) * 1000
+        try:
+            path, _ = save_subbyte_gguf("w", data, tmp)
+            model = SubByteModel(path)
+            for fn, args in [("weight_at", (1000,)), ("weight_at", (-1,)),
+                             ("weights", (0, 5000)), ("weights", (5, 3))]:
+                with self.assertRaises(IndexError, msg=f"{fn}{args}"):
+                    getattr(model, fn)(*args)
+            self.assertEqual(model.weights(0, 0), [])
+            model.close()
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)

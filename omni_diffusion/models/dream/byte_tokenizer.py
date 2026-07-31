@@ -150,7 +150,9 @@ class ByteTokenizer:
         """
         raw = bytearray()
         for i in ids:
-            i = int(i) & 0x1FF
+            i = int(i)
+            if i < 0 or i >= 264:
+                continue
             if skip_special_tokens and i in SPECIAL_IDS:
                 continue
             if i < 256:

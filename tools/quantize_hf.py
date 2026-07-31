@@ -147,11 +147,20 @@ def main() -> None:
 
     ptr_bytes = save_pointer_gguf(pointers, args.out)
     print(f"{args.repo}: {len(pointers)} tensors -> {ptr_bytes} bytes")
-    # verify: fetch one small span, /0.001 reverse must be byte-exact
+    # verify: real invariants, not a tautology
+    from omni_diffusion.x8d_hf import expected_span_length
+
     sample = min(pointers.items(), key=lambda kv: kv[1]["end"] - kv[1]["begin"])[1]
     raw = serve_expert_from_pointer(sample, token=args.token)
-    reversed_bytes = bytes(int(round(b * 0.001 / 0.001)) & 0xFF for b in raw)
-    print(f"  verify {sample['name']} ({len(raw)} B): reverse exact = {raw == reversed_bytes}")
+    span_ok = len(raw) == sample["end"] - sample["begin"]
+    exp = expected_span_length(sample["shape"], sample["dtype"])
+    shape_ok = exp is None or exp == sample["end"] - sample["begin"]
+    print(
+        f"  verify {sample['name']} ({len(raw)} B): "
+        f"span[{sample['begin']},{sample['end']}) len_ok={span_ok} shape*{sample['dtype']}==span={shape_ok}"
+    )
+    if not (span_ok and shape_ok):
+        raise SystemExit("pointer verification FAILED")
 
 
 if __name__ == "__main__":

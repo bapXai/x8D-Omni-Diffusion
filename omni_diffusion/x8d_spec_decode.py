@@ -36,6 +36,9 @@ HEAVY_LOAD_VERIFY_CLIP: int = 16
 
 DEFAULT_VERIFY_LEN: int = 64
 
+#: Per-byte confidence contribution ``b / 256`` (avoid float() per position).
+_BYTE_SCALE: Tuple[float, ...] = tuple(b / 256.0 for b in range(256))
+
 
 class SpeculativeDecodeError(ValueError):
     """Raised when speculative decoding cannot reach convergence."""
@@ -138,14 +141,15 @@ def speculative_quantize(
     out_quanta: List[float] = []
     stats = {"blocks": len(blocks), "regenerations": 0, "converged": 0}
     step = 0
+    byte_scale = _BYTE_SCALE
     for block in blocks:
         current = block
         for _ in range(max_steps):
             # one sha256 per block, not one per position (64x fewer hashes)
             block_conf = float(_block_surrogate(current, step))
-            confidence = [(block_conf + float(b) / 256.0) / 2.0 for b in current]
+            confidence = [(block_conf + byte_scale[b]) / 2.0 for b in current]
             failed = _verify_positions(
-                list(current),
+                current,
                 confidence,
                 heavy_load=heavy_load,
                 verify_len=verify_len,
@@ -165,6 +169,8 @@ def speculative_quantize(
             )
         stats["converged"] += 1
         out_quanta.extend(quantize(current))
+    # trim the zero-padded tail: output must be length-preserving
+    del out_quanta[len(weight_bytes):]
     return out_quanta, stats
 
 

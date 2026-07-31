@@ -29,6 +29,9 @@ _HEADER_SIZE = struct.calcsize(_HEADER_FMT)
 
 X8D_HEADER = struct.pack(_HEADER_FMT, GGUF_MAGIC, 0)
 
+#: Precomputed sub-byte coordinate for every byte (0.001 law), for quantize().
+_QUANTA_LUT: Tuple[float, ...] = tuple(float(b) * LAW for b in range(256))
+
 
 class X8DHeaderError(ValueError):
     """Raised when a file does not carry a valid x8D header."""
@@ -43,11 +46,16 @@ def quantize(weight_bytes: Iterable[int]) -> List[float]:
     Returns:
         List of sub-byte coordinates in the fractional domain.
     """
-    return [float(int(b) & 0xFF) * LAW for b in weight_bytes]
+    lut = _QUANTA_LUT
+    return [lut[int(b) & 0xFF] for b in weight_bytes]
 
 
 def dequantize(quanta: Iterable[float]) -> bytes:
     """Invert the 0.001 law: ``weight_byte = round(quanta / 0.001)``.
+
+    Uses a memoized pointer map: the quanta are almost always drawn from the
+    256 canonical sub-byte coordinates, so the ``round(q / LAW)`` inverse is
+    computed once per distinct coordinate instead of once per element.
 
     Args:
         quanta: iterable of sub-byte coordinates.
@@ -55,7 +63,7 @@ def dequantize(quanta: Iterable[float]) -> bytes:
     Returns:
         Restored raw byte string.
     """
-    return bytes([int(round(float(q) / LAW)) & 0xFF for q in quanta])
+    return bytes(_dequantized(quanta))
 
 
 def to_u8(quanta: Iterable[float]) -> bytes:
@@ -65,7 +73,41 @@ def to_u8(quanta: Iterable[float]) -> bytes:
     (``round(q / LAW)``) is exactly the original byte, so storage is lossless
     in raw byte form. This is the storage half of the pointer map.
     """
-    return bytes([int(round(float(q) / LAW)) & 0xFF for q in quanta])
+    return bytes(_dequantized(quanta))
+
+
+def _dequantized(quanta: Iterable[float]) -> Iterable[int]:
+    """Generator over the U8 byte projection of sub-byte coordinates.
+
+    Memoizes ``round(q / LAW)`` per distinct coordinate so bulk dequantize /
+    to_u8 on large tensors avoids recomputing float math for repeated values.
+    """
+    memo: Dict[float, int] = {}
+    for q in quanta:
+        b = memo.get(q)
+        if b is None:
+            b = int(round(float(q) / LAW)) & 0xFF
+            memo[q] = b
+        yield b
+
+
+def _coerce_payload(data: Iterable) -> bytes:
+    """Normalize a non-bytes payload to raw U8 bytes without corruption.
+
+    Accepts either raw weight bytes (ints 0-255) or sub-byte quanta (floats
+    in [0.0, 0.255]); ints are stored byte-identical, floats are projected
+    back through ``round(q / LAW)`` exactly as ``to_u8`` does.
+
+    Args:
+        data: iterable of ints (raw bytes) or floats (quanta).
+
+    Returns:
+        The equivalent raw U8 byte string.
+    """
+    values = list(data)
+    if any(isinstance(v, float) for v in values):
+        return to_u8(values)
+    return bytes(int(v) & 0xFF for v in values)
 
 
 def save_gguf(file_payloads: Mapping[str, bytes], filename: str) -> str:
@@ -85,11 +127,16 @@ def save_gguf(file_payloads: Mapping[str, bytes], filename: str) -> str:
     if not isinstance(file_payloads, dict):
         raise TypeError("file_payloads must be a dict[str, bytes]")
 
+    if not file_payloads:
+        with open(filename, "wb") as f:
+            f.write(X8D_HEADER)
+        return filename
+
     with open(filename, "wb") as f:
         f.write(X8D_HEADER)
         for name, data in file_payloads.items():
             if not isinstance(data, (bytes, bytearray)):
-                data = to_u8(int(b) & 0xFF for b in data)
+                data = _coerce_payload(data)
             name_bytes = name.encode("utf-8")
             f.write(struct.pack("<I", len(name_bytes)))
             f.write(name_bytes)

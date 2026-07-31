@@ -33,6 +33,47 @@ from .x8d_export import GGUF_MAGIC, LAW, X8D_HEADER, save_gguf
 #: safetensors header: <u64: header_len><json header><data...>
 _ST_HEADER = struct.Struct("<Q")
 
+#: Bytes per element for safetensors dtypes (shape invariant verification).
+_DTYPE_NBYTES: Dict[str, int] = {
+    "BOOL": 1,
+    "U8": 1, "I8": 1, "F8": 1,
+    "F8_E4M3": 1, "F8_E5M2": 1, "FP8": 1,
+    "U16": 2, "I16": 2, "F16": 2, "BF16": 2, "FP16": 2,
+    "U32": 4, "I32": 4, "F32": 4, "FP32": 4, "TF32": 4,
+    "U64": 8, "I64": 8, "F64": 8, "FP64": 8,
+}
+
+
+def dtype_nbytes(dtype: str) -> Optional[int]:
+    """Bytes per element for a safetensors dtype, or None if unknown.
+
+    Args:
+        dtype: safetensors dtype name (e.g. "F32", "BF16", "U8").
+
+    Returns:
+        Element size in bytes, or None for unknown dtypes.
+    """
+    return _DTYPE_NBYTES.get(dtype.upper())
+
+
+def expected_span_length(shape: list, dtype: str) -> Optional[int]:
+    """Expected ``end - begin`` bytes for a tensor record, or None.
+
+    Args:
+        shape: tensor shape (list of ints).
+        dtype: safetensors dtype name.
+
+    Returns:
+        ``prod(shape) * dtype_nbytes(dtype)``, or None if unknown dtype.
+    """
+    nb = dtype_nbytes(dtype)
+    if nb is None:
+        return None
+    n = 1
+    for dim in shape:
+        n *= int(dim)
+    return n * nb
+
 
 class SafetensorsShard:
     """On-disk reader for a .safetensors shard (no RAM load of data)."""
@@ -212,7 +253,8 @@ def load_pointer_map(
     import urllib.request
 
     if local_path is not None:
-        data = open(local_path, "rb").read()
+        with open(local_path, "rb") as fh:
+            data = fh.read()
     else:
         url = f"https://huggingface.co/{repo_id}/resolve/main/{pointer_file}"
         req = urllib.request.Request(url)

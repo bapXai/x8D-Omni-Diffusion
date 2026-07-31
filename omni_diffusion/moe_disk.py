@@ -25,6 +25,11 @@ from .x8d_export import GGUF_MAGIC, LAW, _HEADER_SIZE
 #: MoE expert key convention: ``<layer>.<expert_idx>.w{1,2,3}``
 _EXP_KEY_FMT = "layers.{layer}.experts.{expert}.w{proj}"
 
+#: Precomputed /0.001 reverse pointer map for every stored byte.
+#: ``round((b * LAW) / LAW) & 0xFF`` is byte-exact for every b in 0-255, so
+#: the live reverse is a LUT lookup, not per-element float math.
+_REVERSE_LUT: Tuple[int, ...] = tuple(int(round((b * LAW) / LAW)) & 0xFF for b in range(256))
+
 
 def _proj_numeric(proj: str) -> str:
     """Accept 'w1' or '1' and normalize to '1'."""
@@ -139,7 +144,8 @@ class MoEOnDisk:
                         f"{key}: stored {len(data)} bytes, shape {shape} needs {expected}"
                     )
         # the ONLY place /0.001 runs: live reverse on this expert's span
-        return [int(round((b * 0.001) / LAW)) & 0xFF for b in data]
+        lut = _REVERSE_LUT
+        return [lut[b] for b in data]
 
     def matmul_fp32(self, layer: int, expert: int, hidden: List[float], proj: str = "w1") -> List[float]:
         """CPU-only forward: expert weight (bytes -> [-1,1] scale) @ hidden.
@@ -170,7 +176,8 @@ class MoEOnDisk:
         return out
 
     def size_mb(self) -> float:
-        return self.reader.tensor_size  # placeholder never called
+        """Disk size of the mmap'd container in MB."""
+        return os.path.getsize(self.reader.path) / 1e6
 
     def disk_size_mb(self) -> float:
         return os.path.getsize(self.path if hasattr(self, "path") else self.reader.path) / 1e6

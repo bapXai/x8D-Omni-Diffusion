@@ -76,6 +76,27 @@ class SpeculativeQuantizeTest(unittest.TestCase):
         self.assertEqual(stats["blocks"], (1000 + BLOCK_SIZE - 1) // BLOCK_SIZE)
         self.assertEqual(stats["converged"], stats["blocks"])
 
+    def test_speculative_quantize_length_preserving(self):
+        # regression #23: output must be exactly len(input), no padded tail
+        for n in (1, 63, 64, 65, 1000):
+            data = bytes(i % 256 for i in range(n))
+            quanta, _ = speculative_quantize(data, max_steps=16, seed=0)
+            restored = bytes(int(round(q / LAW)) & 0xFF for q in quanta)
+            self.assertEqual(len(restored), n, f"length for n={n}")
+            self.assertEqual(restored, data, f"exact bytes for n={n}")
+
+    def test_speculative_save_gguf_length_preserving(self):
+        data = bytes(range(100))
+        tmp = os.path.join(os.path.dirname(__file__), "_tmp_spec_len.gguf")
+        try:
+            path, _ = speculative_save_gguf("w", data, tmp, seed=0)
+            payloads, _ = load_gguf(path)
+            self.assertEqual(len(payloads["w"]), len(data))
+            self.assertEqual(payloads["w"], data)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
     def test_speculative_quantize_deterministic(self):
         data = os.urandom(512)
         q1, _ = speculative_quantize(data, max_steps=16, seed=7)

@@ -108,6 +108,13 @@ class ByteTokenizerTest(unittest.TestCase):
         ids = self.tok.encode(raw, add_special_tokens=False)
         self.assertEqual(self.tok.decode(ids), raw)
 
+    def test_decode_rejects_out_of_vocab_ids(self):
+        # ids >= 264 must never wrap into content bytes (regression #21)
+        self.assertEqual(self.tok.decode([512, 513], as_bytes=True), b"")
+        self.assertEqual(self.tok.decode([300, 400], as_bytes=True), b"")
+        self.assertEqual(self.tok.decode([-1, 255], as_bytes=True), b"\xff")
+        self.assertEqual(self.tok.decode([97, 263, 98], as_bytes=True), b"ab")
+
 
 if __name__ == "__main__":
     unittest.main()

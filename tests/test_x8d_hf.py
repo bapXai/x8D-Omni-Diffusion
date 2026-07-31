@@ -14,6 +14,9 @@ from omni_diffusion.x8d_export import GGUF_MAGIC, save_gguf  # noqa: E402
 from omni_diffusion.x8d_hf import (  # noqa: E402
     SafetensorsShard,
     convert_shard_to_gguf,
+    dtype_nbytes,
+    expected_span_length,
+    load_pointer_map,
     parse_safetensors_header,
 )
 
@@ -153,6 +156,46 @@ class MoEDiskTest(unittest.TestCase):
             self.assertEqual(r.tensor_bytes("layers.0.experts.7.w1"), bytes(range(16)))
         finally:
             r.close()
+
+    def test_size_mb_returns_float(self):
+        # regression #20: size_mb must return a number, not a bound method
+        m = MoEOnDisk(self.gguf)
+        try:
+            v = m.size_mb()
+            self.assertIsInstance(v, float)
+            self.assertGreater(v, 0.0)
+        finally:
+            m.close()
+
+
+class DtypeSpanTest(unittest.TestCase):
+    def test_dtype_nbytes(self):
+        self.assertEqual(dtype_nbytes("F32"), 4)
+        self.assertEqual(dtype_nbytes("bf16"), 2)
+        self.assertEqual(dtype_nbytes("U8"), 1)
+        self.assertEqual(dtype_nbytes("FP4"), None)
+        self.assertEqual(dtype_nbytes("nonsense"), None)
+
+    def test_expected_span_length(self):
+        self.assertEqual(expected_span_length([2, 3, 4], "F32"), 96)
+        self.assertEqual(expected_span_length([256, 256], "BF16"), 131072)
+        self.assertEqual(expected_span_length([4, 4], "nonsense"), None)
+
+    def test_load_pointer_map_local(self):
+        tmp = os.path.join(TMPDIR, "ptr.gguf")
+        ptrs = {
+            "a": {"repo": "r", "shard": "s", "begin": 0, "end": 4, "dtype": "U8", "shape": [4]},
+            "b": {"repo": "r", "shard": "s", "begin": 4, "end": 12, "dtype": "F32", "shape": [2]},
+        }
+        import sys as _sys
+
+        _sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools")))
+        from quantize_kimi_k3 import save_pointer_gguf  # noqa: E402
+
+        save_pointer_gguf(ptrs, tmp)
+        loaded = load_pointer_map("unused", "unused", local_path=tmp)
+        self.assertEqual(loaded, ptrs)
+        os.remove(tmp)
 
 
 if __name__ == "__main__":
