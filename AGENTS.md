@@ -1,0 +1,164 @@
+# x8D-Omni-Diffusion — Agent Rules
+
+## 🔒 Foundational Law: Bytes, Not Tokens
+
+**There are NO tokens in this project. Only raw 8-bit bytes (0–255).**
+
+Every agent, script, and model component MUST treat the 256 unsigned integer states (0x00–0xFF) as the **sole native vocabulary**. The traditional concept of "tokens" (BPE, SentencePiece, WordPiece, or any sub-word vocabulary) is explicitly **banned** from this codebase.
+
+### Why Bytes Replace Tokens
+
+- Modern CPUs, GPUs, memory buses, and storage devices already operate on 8-bit bytes natively.
+- The 256-state byte vocabulary is **universal** — it encodes text (UTF-8), images (pixel bytes), audio (PCM samples), code, binaries, and every other data format without any tokenizer overhead.
+- Higher bit-widths (16-bit, 32-bit, 64-bit, 128-bit) are nothing but sequential compositions built on top of 8-bit bytes. Bytes are the atomic unit.
+- Eliminating the tokenizer removes an entire software layer of complexity, latency, and vocabulary mismatch errors.
+
+### Enforcement Rules
+
+1. **Never** import, instantiate, or reference any BPE/SentencePiece/WordPiece tokenizer.
+2. **Never** use `vocab.json`, `merges.txt`, or any merge-based encoding file.
+3. The model's embedding layer MUST have size `264` (256 byte states + 8 special tokens: MASK=256, PAD=257, BOS=258, EOS=259, IMG_START=260, IMG_END=261, AUD_START=262, AUD_END=263).
+4. The `lm_head` output projection MUST match: `nn.Linear(hidden_size, 264)`.
+5. All data pipelines MUST convert inputs to raw byte arrays: `list(data_bytes)` — no encoding step, no vocabulary lookup.
+
+---
+
+## 🗜️ x8Dsub-byte 0.001 Threshold & Pre-trained Weight Compression
+
+All pre-trained weights that enter this repository MUST be compressed using the **x8Dsub-byte 0.001 scaling law** before storage:
+
+```
+Quanta[i] = weight_byte[i] × 0.001
+```
+
+### Speculative Decoding for Weight Compression
+
+When importing or converting pre-trained model weights (from HuggingFace, PyTorch checkpoints, safetensors, etc.):
+
+1. **Quantize** all floating-point weight tensors to their nearest 8-bit unsigned integer representation.
+2. **Apply the 0.001 sub-byte scaling** to map each byte into sub-byte coordinate space.
+3. **Store in x8D `.gguf` containers** using `U8` dtype — no float bloat, no JSON metadata pollution.
+4. **Target: 98% disk space reduction** compared to original BF16/FP32 checkpoints.
+5. **Zero-copy mmap serving**: The compressed state IS the running state. No decompression loop. The inverse math (`/ 0.001`) operates as a live coordinate pointer map at inference time.
+
+### Speculative Decoding at Inference
+
+Use DSpark-style semi-autoregressive speculative decoding for inference:
+
+1. Generate entire **8×8 byte blocks** in parallel (not one byte at a time).
+2. A lightweight **confidence head** predicts survival probability per position.
+3. Positions with confidence **below 0.001 threshold** are re-masked and regenerated.
+4. Under heavy load, dynamically clip verification length to save compute.
+
+---
+
+## 🛠️ Git Workflow — Use `gh` CLI for Everything
+
+**All git operations MUST use the GitHub CLI (`gh`) for validation, commits, and issue management.**
+
+### Commits & Validation
+
+```bash
+# Stage and commit changes (always use descriptive messages)
+git add -A
+git commit -m "feat(byte-tokenizer): replace BPE vocab with 256-byte native embedding"
+
+# Push to remote
+git push origin main
+
+# Validate CI status after push
+gh run list --limit 5
+gh run view <run-id>
+```
+
+### Creating Issues
+
+When a user reports or prompts a **new feature**, **bug**, or **issue**, create a GitHub Issue FIRST before writing any code:
+
+```bash
+# New feature request
+gh issue create \
+  --title "feat: <short description>" \
+  --body "## Description\n<detailed description>\n\n## Acceptance Criteria\n- [ ] <criterion 1>\n- [ ] <criterion 2>" \
+  --label "enhancement"
+
+# Bug report
+gh issue create \
+  --title "bug: <short description>" \
+  --body "## Bug Description\n<what happened>\n\n## Expected Behavior\n<what should happen>\n\n## Steps to Reproduce\n1. <step 1>\n2. <step 2>" \
+  --label "bug"
+
+# General issue
+gh issue create \
+  --title "issue: <short description>" \
+  --body "## Context\n<description>\n\n## Action Items\n- [ ] <item 1>" \
+  --label "task"
+```
+
+### Issue-Driven Development Workflow
+
+1. **User prompts a feature/bug/issue** → Agent creates a GitHub Issue via `gh issue create`
+2. **Agent works on the fix/feature** → Commits reference the issue number: `git commit -m "fix(#42): ..."`
+3. **Agent validates** → Run `gh run list` to check CI, run tests locally
+4. **Agent closes the issue** → `gh issue close <number> --comment "Fixed in commit <sha>"`
+
+### Pull Requests
+
+```bash
+# Create a PR from a feature branch
+gh pr create \
+  --title "feat: <description>" \
+  --body "Closes #<issue-number>\n\n## Changes\n- <change 1>\n- <change 2>" \
+  --base main
+
+# Check PR status
+gh pr status
+gh pr checks <pr-number>
+
+# Merge when ready
+gh pr merge <pr-number> --squash --delete-branch
+```
+
+---
+
+## 📁 Project Structure Rules
+
+```
+x8D-Omni-Diffusion/
+├── omni_diffusion/
+│   ├── models/
+│   │   └── dream/
+│   │       ├── byte_tokenizer.py      # Raw 8-bit byte tokenizer (vocab=264)
+│   │       ├── moe_layer.py           # MoE with top-2 routing
+│   │       ├── dspark_diffusion.py    # DSpark block-parallel decoding
+│   │       ├── kda_attention.py       # 3:1 KDA + Gated MLA hybrid
+│   │       ├── modeling_dream.py      # Core model (MODIFIED for bytes)
+│   │       └── configuration_dream.py # Config (vocab_size=264)
+│   ├── models/
+│   │   └── x8d_qat.py                # QAT with Straight-Through Estimator
+│   └── x8d_export.py                 # Export to x8D .gguf containers
+├── research/                          # Research notes, papers, experiments
+├── tests/                             # All test files
+├── configs/                           # Training configs
+├── scripts/                           # Training and eval scripts
+└── AGENTS.md                          # THIS FILE — agent behavioral rules
+```
+
+---
+
+## 🧪 Testing Rules
+
+- Every new module MUST have a corresponding test in `tests/`.
+- Tests MUST pass before any commit: `python -m pytest tests/ -v`
+- Use `gh run list` to verify CI after pushing.
+
+---
+
+## 📐 Code Style
+
+- Python 3.10+
+- Type hints on all function signatures
+- Docstrings on all public classes and methods
+- No external tokenizer dependencies (no `tiktoken`, no `sentencepiece`, no `tokenizers`)
+- PyTorch as the sole deep learning framework
+- All byte operations use unsigned 8-bit integers (`torch.uint8` or `np.uint8`)
