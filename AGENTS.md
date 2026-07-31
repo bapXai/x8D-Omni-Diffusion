@@ -168,6 +168,41 @@ gh pr merge <pr-number> --squash --delete-branch
 
 ---
 
+## 🧮 Quantization, Size & Datasets (audited 2026-07-31)
+
+Implemented in `omni_diffusion/x8d_spec_decode.py` (pure stdlib, no torch).
+
+**Speculative-decode quantization flow** (DSpark-style, per block 8x8=64 bytes):
+1. Generate each 8x8 byte block in parallel; 2. confidence head scores each
+   position; 3. positions < 0.001 threshold are re-masked + regenerated;
+   4. `heavy_load=True` clips verify length to `64 // 16 = 4` positions/block.
+- API: `speculative_quantize()`, `speculative_save_gguf()`, `size_report()`,
+  `print_size_report()`; upgrade path = replace `_block_surrogate` hash with a
+  real confidence head once torch is available.
+- Verify: `python3 -m unittest tests.test_spec_decode -v`
+
+**Size comparison (16B params, 16-bit baseline)** — `print_size_report()`:
+| Representation | Size | vs FP16 |
+|---|---|---|
+| Full FP16/BF16 | 32.00 GB | — |
+| x8D U8 .gguf on disk | 16.00 GB | 50% ↓ (lossless, servable) |
+| Sub-byte coordinates | 32.0 MB | 99.9% ↓ (0.016 bit/weight ceiling) |
+
+**Dataset plan** (`research/Training-Dataset-and-Quantization-Plan.md`):
+- Tier 0 text bytes: FineWeb, The Pile, RedPajama (pure UTF-8 byte streams).
+- Tier 1 multimodal bytes: LAION-5B, ImageNet-1K (pixel bytes), LibriTTS,
+  VoxCeleb2, AudioSet (PCM bytes) — no image/audio encoder needed, bytes live
+  at ids 0-255.
+- Tier 2 SFT: byte-aligned instruction pairs + `[IMG_START]`/`[AUD_START]`
+  modality markup; train denoiser via `mask_canvas`/`renoise_to_random_bytes`.
+- **Shard at raw byte offsets**, never mid-UTF-8-codepoint.
+
+Query testing: `tests/test_queries.py` exercises text/image/audio/binary
+queries through the full encode→mask→denoise→decode pipeline in pure Python
+(`ByteDiffusionSampler` mirrors the future torch `_sample` contract).
+
+---
+
 ## 📁 Project Structure Rules
 
 ```
