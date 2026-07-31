@@ -56,6 +56,53 @@ Use DSpark-style semi-autoregressive speculative decoding for inference:
 
 **All git operations MUST use the GitHub CLI (`gh`) for validation, commits, and issue management.**
 
+### Hugging Face Hub — `hf` CLI
+
+The Hugging Face CLI (`hf`, v1.26.0) is installed and authenticated as **`bapX`**
+(`~/.hf-cli`, symlinked into `~/.local/bin`, token `oauth-bapX` auto-refreshes).
+
+The model lives in an HF **bucket**: `bapX/x8D-Omni-Diffusion`
+(https://huggingface.co/buckets/bapX/x8D-Omni-Diffusion). The bucket holds ONLY
+byte-native files — NO safetensors, NO `vocab.json`/`merges.txt`, NO BPE artifacts.
+
+```bash
+export PATH="/Users/getwinharris/.local/bin:$PATH"
+
+# Auth / identity
+hf auth whoami
+
+# List bucket contents
+hf buckets list bapX/x8D-Omni-Diffusion --human-readable --tree
+
+# Download a single file from the bucket
+hf buckets cp hf://buckets/bapX/x8D-Omni-Diffusion/config.json ./config.json
+
+# Upload a local folder into the bucket (uploads/deletes/skips delta)
+hf buckets sync ./staged_dir/ hf://buckets/bapX/x8D-Omni-Diffusion
+
+# Delete files from the bucket (e.g. old safetensors / BPE tokenizer files)
+hf buckets remove hf://buckets/bapX/x8D-Omni-Diffusion --recursive -y \
+  --include '*.safetensors' --include '*.safetensors.index.json' \
+  --include 'vocab.json' --include 'merges.txt' --include 'added_tokens.json' \
+  --include 'tokenizer_config.json' --include 'special_tokens_map.json' \
+  --include 'tokenization_dream.py'
+
+# Always dry-run before deleting
+hf buckets remove hf://buckets/bapX/x8D-Omni-Diffusion --recursive --dry-run ...
+```
+
+**Bucket rules (enforced):**
+1. NEVER upload `*.safetensors`, `vocab.json`, `merges.txt`, `added_tokens.json`,
+   `tokenizer_config.json`, `special_tokens_map.json`, or `tokenization_dream.py`.
+2. `config.json` MUST be byte-native: `vocab_size=264`, `mask=256`, `pad=257`,
+   `bos=258`, `eos=259`, `img=260/261`, `aud=262/263`, `tie_word_embeddings=true`.
+3. `generation_config.json` MUST use byte-native ids + `alg="entropy_bound"`,
+   `steps=48`, `diffusion_entropy_bound=0.1`, `canvas_length=256`.
+4. Keep `byte_tokenizer.py`, `x8d_export.py`, `configuration_dream.py`, model code,
+   and README in the bucket; the model loads via `trust_remote_code=True`.
+5. Source of truth for HF distribution is `omni_diffusion/models/dream/` + `x8d_export.py`
+   in this repo; sync those into the bucket.
+
 ### Commits & Validation
 
 ```bash
@@ -149,8 +196,29 @@ x8D-Omni-Diffusion/
 ## 🧪 Testing Rules
 
 - Every new module MUST have a corresponding test in `tests/`.
-- Tests MUST pass before any commit: `python -m pytest tests/ -v`
+- **Byte-native core tests run on pure Python stdlib `unittest`** — NO torch/transformers
+  required. Command: `python3 -m unittest discover -s tests -v`.
+- Torch-dependent tests (model forward, training) are gated with `skipUnless(HAS_TRANSFORMERS)`.
+- Tests MUST pass before any commit.
 - Use `gh run list` to verify CI after pushing.
+
+## 📦 Dependency Stance (audited 2026-07-31 against cactus-compute/needle)
+
+The byte-native core (`byte_tokenizer.py`, `x8d_export.py`, their tests) has **ZERO
+external dependencies** — pure Python stdlib only. `requirements_core.txt` documents the
+optional torch-training stack.
+
+| Dependency | Verdict |
+|---|---|
+| torch, transformers | training/inference only, never the byte core |
+| datasets, huggingface_hub | data + distribution (justified) |
+| pyyaml | training configs (justified) |
+| wandb, tqdm, google-genai | optional |
+| jax, jaxlib, flax, optax | **REJECTED** — PyTorch is the sole DL framework (needle used these for JAX/TPU; we port concepts only: Muon, WSD, scan/remat) |
+| sentencepiece, tiktoken, tokenizers | **BANNED** — byte law |
+| gcsfs | **REJECTED** — dead dependency even in needle |
+
+See `research/Needle-Dependency-Audit.md` for the full analysis.
 
 ---
 
