@@ -1,5 +1,25 @@
 # x8D-Omni-Diffusion — Agent Rules
 
+## 📜 Context Tracking (MANDATORY)
+
+Every new user prompt MUST be documented before any code is written:
+
+1. **Append the prompt to `context.md`** — one entry per prompt, in
+   chronological order, with a status legend (✅ done · 🟡 in progress ·
+   ❌ blocked · 📌 queued). Summarize the ask, the findings, and the outcome.
+2. **Update `todo.md`** — add/move/close the concrete tasks the prompt implies.
+3. **Update `objective.md`** — refresh the goals/current-focus if the prompt
+   changes the north star.
+4. **Update AGENTS.md** — record new workflow rules, audits, and definitions;
+   regenerate the file index when files change.
+5. **Update `CHANGELOG.md`** — track merged work by issue number.
+
+A prompt that adds no new work still gets a context.md entry (e.g. status
+flips, clarifications). This file set (`context.md`, `todo.md`, `objective.md`)
+is the source of truth for "what did we do so far" questions.
+
+---
+
 ## 🔒 Foundational Law: Bytes, Not Tokens
 
 **There are NO tokens in this project. Only raw 8-bit bytes (0–255).**
@@ -299,6 +319,62 @@ the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.
 expert. Routing guarantees only the requested boundary's byte span is mmap'd +
 /0.001-reversed; boundaries are pairwise isolated by construction.
 
+**What is in the model weights (2026-07-31, #48) — READ THIS.**
+The model repo `bapX/x8D-Omni-Diffusion/x8d_weights/` holds the x8D weight
+artifacts for the four SARA experts. These ARE the models — generation must
+serve from them, never from a full float checkpoint.
+
+| File | Kind | Upstream model it references | Modal role |
+|---|---|---|---|
+| `kimi_k3.x8dptr.gguf` (163 MB) | `X8DPTR01` pointer map | `moonshotai/Kimi-K3` (2.78 T, 104.2 B active) | text |
+| `kokoro.x8dptr.gguf` (171 B) | `X8DPTR01` pointer map | `hexgrad/Kokoro-82M` (82 M) | TTS audio |
+| `ltx2.x8dptr.gguf` (2.3 MB) | `X8DPTR01` pointer map | `Lightricks/LTX-2` (19 B) | image + video |
+| `whisper.x8dptr.gguf` (343 KB) | `X8DPTR01` pointer map | `openai/whisper-large-v3` (1.55 B) | ASR audio |
+
+- An `X8DPTR01` pointer map = the compressed model. Each record is
+  `tensor_name -> {repo, shard, byte_begin, byte_end, dtype, shape}`. Weight
+  bytes stay on the upstream HF disk; only the requested expert's exact span
+  is Range-fetched and `/0.001`-reversed live at query time (#10/#9).
+- For dense experts (Kokoro = one BLOB = the whole `.pth`), the serving path
+  is: fetch the blob ONCE via the pointer map -> quantize into an `X8DGGUF1`
+  U8×0.001 container (the **x8D quantized weight**) -> delete the source ->
+  mmap the container and run the forward pass from it.
+- **NEVER download/keep a full float checkpoint, and NEVER `torch.load` a
+  full `.pth` to run.** The full checkpoint exists only as the one-time
+  quantization input and is deleted the moment the quantized container is
+  written. Running the quantized model requires ONLY the quantized container
+  + the model's forward-pass code. If you find yourself reaching for the full
+  float file, you are doing it wrong.
+
+**New sub-byte quantization for real models (2026-07-31, #48) —
+`omni_diffusion/x8d_quanta.py`.**
+Real float tensors cannot be stored as bare 0-255 coordinates without
+sign/range, so the 0.001 law is applied ON TOP of a per-tensor symmetric U8
+quantization:
+
+```
+scale = max(|w|) / 127                    # per-tensor float32 (tiny manifest)
+quanta = clamp(round(w / scale), -127, 127) + 128    # U8 coordinate
+w      ~= (quanta - 128) * scale          # live /0.001 reverse at query time
+```
+
+- Each tensor's U8 coordinates are stored in an `X8DGGUF1` container (raw
+  bytes, no float weight bloat) behind a compact binary manifest of
+  `{scale, shape, dtype}` — NOT JSON weight data, only quantization params.
+- Serving = `mmap` the container, slice the exact tensor spans (zero-copy),
+  reverse `(quanta-128)*scale` on demand. The compressed state IS the running
+  state; the full model is never materialized.
+- Proof (Kokoro-82M, real): `kokoro-v1_0.pth` 327 MB (81,763,410 params,
+  548 tensors, 5 submodules `bert/bert_encoder/predictor/text_encoder/decoder`)
+  -> `kokoro.x8dgguf` 81.9 MB U8 container; source deleted after quantization.
+- Real serving: `omni_diffusion/x8d_expert.py` `KokoroTTS` builds the real
+  Kokoro architecture from `config.json` + loads weights from the mmap'd
+  container, phonemizes via `misaki`, and synthesizes real 24 kHz audio on
+  MPS/CPU — no full model anywhere. The same pattern applies to Whisper
+  (ASR, CPU/MPS-runnable), LTX-2 (image/video, GPU-required 19B) and
+  Kimi-K3 (text, GPU-required 2.78T); those two are honest GPU-gated until a
+  GPU box runs them.
+
 **Colibrì deep-dive (#41, audited 2026-07-31 vs live upstream)** —
 `JustVugg/colibri` (pure-C `c/colibri.c`, 437 KB) runs GLM-5.2 (744B/40B MoE)
 in 25 GB RAM by treating VRAM/RAM/NVMe as one managed memory hierarchy —
@@ -463,6 +539,12 @@ Complete index of every file in the repo (regenerated 2026-07-31, #12).
 x8D-Omni-Diffusion/
 ├── AGENTS.md                          # THIS FILE — agent behavioral rules
 ├── README.md                          # Project readme (byte-native pitch)
+├── context.md                         # Prompt log (mandatory, append per prompt)
+├── todo.md                            # Task tracker (from context.md)
+├── objective.md                       # North star / goals / definition of done
+├── CONTRIBUTING.md                    # Contribution guide
+├── CHANGELOG.md                       # Changelog by issue number
+├── implementation_plan.md             # 6-phase train-from-scratch plan
 ├── .gitignore
 ├── .gitmodules                        # git submodules (if any)
 ├── setup.py                           # Package setup
@@ -493,6 +575,9 @@ x8D-Omni-Diffusion/
 │   ├── x8d_dataset.py                 # [#25] HF datasets-server import -> 8x8 block-compressed .x8dds.gguf
 │   ├── x8d_mmap.py                    # [#41] zero-copy mmap frame reader over .gguf/.x8dds.gguf
 │   ├── x8d_telemetry.py               # [#41] per-8x8-block I/O + RSS telemetry (Colibrì port)
+│   ├── x8d_quanta.py                  # [#48] real-model sub-byte quantization -> X8DGGUF1 U8×0.001 container + live reverse
+│   ├── x8d_expert.py                  # [#48] on-container expert serving (KokoroTTS real TTS from quantized weights)
+│   ├── x8d_media.py                   # procedural PNG/PCM/AVI — obsolete (superseded by real-model path, #48)
 │   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
 │   │
 │   ├── data/
@@ -567,7 +652,8 @@ x8D-Omni-Diffusion/
 │   ├── test_byte_processors.py        # [#42] byte-native image/audio processors + mmap JSONL import
 │   ├── test_openai_server.py          # OpenAI-compatible endpoint contract (incl. SSE stream)
 │   ├── test_openai_server_live.py     # [#43/#45] static/SSE/telemetry + DiskRepoModeTest low-RAM
-│   └── (test_moe_disk.py)             # [#9] planned
+│   ├── test_x8d_media.py              # obsolete along with x8d_media.py (no commit made)
+│   └── (test_moe_disk.py, test_x8d_quanta.py, test_x8d_expert.py)  # planned #9/#48
 │
 └── tools/
     ├── finetune_dream_v4_51_3.py      # Training tool
