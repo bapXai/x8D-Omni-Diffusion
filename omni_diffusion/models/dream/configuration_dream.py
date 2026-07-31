@@ -28,26 +28,39 @@ class DreamConfig(PretrainedConfig):
 
     def __init__(
         self,
-        vocab_size=151936,
+        vocab_size=264,
         hidden_size=4096,
         intermediate_size=22016,
         num_hidden_layers=32,
         num_attention_heads=32,
         num_key_value_heads=32,
+        num_global_key_value_heads=2,
         hidden_act="silu",
         max_position_embeddings=32768,
         initializer_range=0.02,
         rms_norm_eps=1e-6,
         use_cache=False,  # cache not used in diffusion
-        tie_word_embeddings=False,
+        tie_word_embeddings=True,
         rope_theta=10000.0,
         rope_scaling=None,
         use_sliding_window=False,
-        sliding_window=4096,
+        sliding_window=1024,
         max_window_layers=28,
         attention_dropout=0.0,
-        mask_token_id=151666,
-        pad_token_id=151643,
+        mask_token_id=256,
+        pad_token_id=257,
+        bos_token_id=258,
+        eos_token_id=259,
+        img_start_token_id=260,
+        img_end_token_id=261,
+        aud_start_token_id=262,
+        aud_end_token_id=263,
+        final_logit_softcap=None,
+        canvas_length=256,
+        max_denoising_steps=48,
+        diffusion_sampler="entropy_bound",
+        diffusion_entropy_bound=0.1,
+        self_conditioning=True,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -65,6 +78,7 @@ class DreamConfig(PretrainedConfig):
             num_key_value_heads = num_attention_heads
 
         self.num_key_value_heads = num_key_value_heads
+        self.num_global_key_value_heads = num_global_key_value_heads
         self.hidden_act = hidden_act
         self.initializer_range = initializer_range
         self.rms_norm_eps = rms_norm_eps
@@ -84,3 +98,16 @@ class DreamConfig(PretrainedConfig):
         )
         self.mask_token_id = mask_token_id
         self.pad_token_id = pad_token_id
+        self.bos_token_id = bos_token_id
+        self.eos_token_id = eos_token_id
+        self.img_start_token_id = img_start_token_id
+        self.img_end_token_id = img_end_token_id
+        self.aud_start_token_id = aud_start_token_id
+        self.aud_end_token_id = aud_end_token_id
+        # DiffusionGemma-inspired sampling (research/DiffusionGemma.md §7)
+        self.final_logit_softcap = final_logit_softcap
+        self.canvas_length = canvas_length
+        self.max_denoising_steps = max_denoising_steps
+        self.diffusion_sampler = diffusion_sampler
+        self.diffusion_entropy_bound = diffusion_entropy_bound
+        self.self_conditioning = self_conditioning
