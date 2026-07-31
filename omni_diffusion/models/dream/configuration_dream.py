@@ -61,6 +61,7 @@ class DreamConfig(PretrainedConfig):
         diffusion_sampler="entropy_bound",
         diffusion_entropy_bound=0.1,
         self_conditioning=True,
+        use_audio=False,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -111,3 +112,4 @@ class DreamConfig(PretrainedConfig):
         self.diffusion_sampler = diffusion_sampler
         self.diffusion_entropy_bound = diffusion_entropy_bound
         self.self_conditioning = self_conditioning
+        self.use_audio = use_audio

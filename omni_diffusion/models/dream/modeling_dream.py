@@ -195,10 +195,31 @@ class DreamRotaryEmbedding(nn.Module):
             self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
+        if self.rope_type not in ROPE_INIT_FUNCTIONS and self.rope_type == "default":
+            self.rope_type = "linear"  # transformers >=5 renamed 'default' -> 'linear'
         self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device, **self.rope_kwargs)
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        rope_params = None
+        if self.config is not None:
+            rope_params = getattr(self.config, "rope_scaling", None) or {}
+        use_inline_default = self.rope_type == "linear" and "factor" not in rope_params
+        if use_inline_default:
+            # Plain (unscaled, NTK-free) RoPE: transformers >=5 only exposes the
+            # 'linear' path via a rope_scaling dict carrying 'factor'; when the
+            # config is plain default we compute standard inv_freq inline so the
+            # model stays importable across transformers 4.x and 5.x.
+            dim = self.config.hidden_size // self.config.num_attention_heads
+            base = float(getattr(self.config, "rope_theta", rope_params.get("rope_theta", 10000.0)))
+            inv_freq = 1.0 / (
+                base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim)
+            )
+            self.attention_scaling = 1.0
+            self.register_buffer("inv_freq", inv_freq, persistent=False)
+        else:
+            inv_freq, self.attention_scaling = self.rope_init_fn(
+                self.config, device, **self.rope_kwargs
+            )
+            self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
     def reset_parameters(self):
@@ -735,7 +756,6 @@ class DreamPrefixLMCache(Cache):
         return None
  
 
-import deepspeed
 class DreamBaseModel(DreamPreTrainedModel):#
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`DreamDecoderLayer`]
@@ -760,8 +780,8 @@ class DreamBaseModel(DreamPreTrainedModel):#
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
 
-        self.audio_model = AudioEncoder()
-        self.audio_projection = ResamplerProjector(512, config.hidden_size)
+        self.audio_model = AudioEncoder() if getattr(config, "use_audio", False) else None
+        self.audio_projection = ResamplerProjector(512, config.hidden_size) if getattr(config, "use_audio", False) else None
 
         self.post_init()
 
@@ -788,13 +808,15 @@ class DreamBaseModel(DreamPreTrainedModel):#
     ) -> Union[Tuple, BaseModelOutput]:
 
         if (past_key_values is None or len(past_key_values) == 0) and audios is not None:
+            if self.audio_model is None:
+                raise ValueError("audios passed but config.use_audio=False (audio needs an AudioEncoder)")
             audio_embeds, audio_lengths = self.audio_model(audios)
             assert audio_embeds.shape[0] == len(audios)
             fake_audios = None
 
             audio_embeds = self.audio_projection(audio_embeds)
 
-        elif self.training:
+        elif self.training and self.audio_model is not None:
             device = self.get_input_embeddings().weight.data.device
             dtype = self.get_input_embeddings().weight.data.dtype
             fake_audios = torch.ones((1, 1, 560), dtype=dtype, device=device)
@@ -867,6 +889,8 @@ class DreamBaseModel(DreamPreTrainedModel):#
                 all_hidden_states += (hidden_states,)
 
             if self.gradient_checkpointing and self.training:
+                import deepspeed  # lazy: only needed for grad-checkpointed training
+
                 layer_outputs = deepspeed.checkpointing.checkpoint(
                     decoder_layer,
                     hidden_states,
@@ -915,7 +939,8 @@ class DreamBaseModel(DreamPreTrainedModel):#
 
 
 class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
-    _tied_weights_keys = ["lm_head.weight"]
+    # transformers >=5 expects a target->source dict (list form was 4.x-only).
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
 
     def __init__(self, config):
         super().__init__(config)
@@ -974,6 +999,13 @@ class DreamModel(DreamGenerationMixin, DreamPreTrainedModel):
         if ENFORCE_NUM_ITEMIN_BATCH:
             num_items_in_batch = labels.ne(-100).sum()
             num_items_in_batch = torch.distributed.reduce(num_items_in_batch)
+
+        if position_ids is None:
+            position_ids = torch.arange(
+                input_ids.shape[1], dtype=torch.long, device=input_ids.device
+            ).unsqueeze(0).expand(input_ids.shape[0], -1)
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids, dtype=torch.long)
 
         is_new = position_ids == 0
         # is_new[0] = True
