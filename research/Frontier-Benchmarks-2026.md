@@ -14,6 +14,21 @@ audits (Artificial Analysis, Vals AI, Vellum, DeepInfra). Prices list-rate.
 | Claude Fable 5 | Anthropic | — | closed | undisclosed | — | $10 / $50 est. | no |
 | Gemini 3.6 Flash | Google | — | closed | undisclosed | 1M | low-cost tier | no |
 
+**Architecture deep-dive (2026 papers, see Depth-Context-Attention-Frameworks-2026.md):**
+- **Kimi K3** = 3:1 hybrid of Kimi Delta Attention (recurrent linear memory,
+  channel-wise decay; constant KV) + Multi-Head Latent Attention, each followed
+  by MoE FFN. Depth-side: Attention Residuals (Block AttnRes, N≈8) replaces
+  fixed residuals — mitigates PreNorm dilution, ~1.25× compute-equivalent gain.
+  KV cache −75%, ~6× decode throughput.
+- **DeepSeek V4 Pro** = hybrid CSA/HCA (Compressed Sparse Attention) + mHC
+  (Manifold-constrained Hyper-Connections) residuals, 1.6T/49B active MoE,
+  auxiliary-loss-free load balance, MTP multi-token-prediction modules (built-in
+  speculative drafter), DSpeak native voice tokens.
+- For x8D the actionable mechanisms: KDA-style memory (fewer bytes served per
+  token), MTP (model-as-own-drafter ≈ our DSpark confidence head), Block AttnRes
+  (depth-fix for the Dream denoiser), Muon optimizer (wins across linear
+  families).
+
 ## Benchmark scores (public, July 2026)
 
 | Benchmark | GPT-5.6 Sol | Kimi K3 | Claude Opus 5 | DeepSeek V4 |
@@ -54,14 +69,15 @@ the same factor as the storage cost.
 
 ## x8D byte-core speed (measured, pure stdlib, this repo)
 
-| Op | Before | After (#14) |
-|---|---|---|
-| spec quantize (DSpark 8x8) 1 MB | 850 ms | 136 ms |
-| sub-byte slice read 100×100k | 1244 ms | 30 ms |
-| pack 1 MB → 2 KB coords | ~7 ms | ~7 ms |
+| Op | Before | After (#14) | After (#18-#23) |
+|---|---|---|---|
+| spec quantize (DSpark 8x8) 1 MB | 850 ms | 136 ms | 96 ms |
+| sub-byte slice read 100×100k | 1244 ms | 30 ms | 30 ms |
+| pack 1 MB → 2 KB coords | ~7 ms | ~7 ms | ~7 ms |
+| `MoEOnDisk.load_expert` 5.5 MB | — | — | 56 ms |
 
 - 16B Dream model: FP16 32 GB → **32 MB** sub-byte (0.016 bit/weight).
-- Kimi-K3 full spec-quantize at 136 ms/MB ≈ 23 min single-thread (2.78 TB)
+- Kimi-K3 full spec-quantize at ~86 ms/MB ≈ 2.8 days single-thread (2.78 TB)
   — but pointer mode needs NO quantize at all: HF bytes are fetched and
   reversed live, so setup is ~instant.
 

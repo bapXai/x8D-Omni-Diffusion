@@ -232,6 +232,33 @@ the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.
   by identity so weights co-adapt to quantization noise. PTQ is ~lossless at 8-bit;
   QAT is the standard recipe below 4-bit. (#6)
 
+**2026 depth/context framework definitions (#24, see
+`research/Depth-Context-Attention-Frameworks-2026.md`):**
+- **AttnRes (Attention Residuals)** = replace fixed residual accumulation
+  (h_l = h_{l-1} + f) with softmax attention over ALL preceding layer outputs:
+  `h_l = Σ_i α_{i→l}·v_i`, α from a learned zero-initialized pseudo-query w_l.
+  Fixes PreNorm dilution (hidden magnitudes grow O(L), gradients explode/vanish
+  with depth). **Block AttnRes**: L layers → N≈8 blocks; intra-block sum, softmax
+  attention over block summaries + embedding; memory/comm O(Ld)→O(Nd), I/O 5.5d
+  per layer (vs mHC 34d, Full AttnRes 24d). ≈ baseline with 1.25× compute.
+  Drop-in residual replacement → target for the Dream byte denoiser (#7 phase 2).
+- **KDA (Kimi Delta Attention)** = recurrent linear memory with channel-wise
+  decay gate: `W = W·D_α + β·r⊗κ` (D_α = Diag(vector forget gate)). Constant
+  memory → O(1)/token inference; K3 interleaves 3:1 KDA:MLA. Gated DeltaNet-2
+  decouples β into channel-wise erase + write gates (its most granular form).
+- **mHC (Manifold-constrained Hyper-Connections)** = DeepSeek's residual
+  re-think: m parallel streams with learned mixing matrices (α_l, β_l, A_l);
+  I/O 34d @ m=4; competitive loss (1.747) but 6× Block-AttnRes I/O.
+- **CLVR (Cross-Layer Value Routing)** = route a lower delta-rule layer's
+  internal write VALUE (not write error — CLER fails) into the shared residual
+  stream via a zero-initialized projection; cheap linear-time depth pathway.
+- **MTP (Multi-Token Prediction)** = independent prediction modules at the
+  stack tail that draft K future tokens for speculative verification (DeepSeek
+  V4). Aligns with our DSpark block-parallel confidence-head plan for
+  `x8d_spec_decode.py` and issue #7.
+- **Engram** = hardware-efficient conditional dictionary lookup as external
+  neural scratchpad memory; ~10% KV vs V3 (secondary source).
+
 ---
 
 ## 📁 Project Structure — Full File Index
@@ -268,7 +295,7 @@ x8D-Omni-Diffusion/
 │   ├── x8d_export.py                  # x8D 0.001 + X8DGGUF1 U8 container
 │   ├── x8d_spec_decode.py             # DSpark 8x8 spec-decode quantizer + size report
 │   ├── x8d_subbyte.py                 # 0.016 bit/weight packed model (32MB=32GB)
-│   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter
+│   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter + pointer loader
 │   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
 │   │
 │   ├── data/
@@ -308,7 +335,10 @@ x8D-Omni-Diffusion/
 │   ├── Needle-Dependency-Audit.md     # dep-by-dep audit vs cactus-compute/needle
 │   ├── Training-Dataset-and-Quantization-Plan.md
 │   ├── Kimi-K3-x8D-Pointer-Quantization.md  # [#10] 1.56TB->2.837GB proof
-│   └── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2 matrix
+│   ├── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2 matrix
+│   ├── Byte-Core-Optimizations.md     # [#14] 6-41x byte-core speedups + [#18-#23] LUT round
+│   ├── Frontier-Benchmarks-2026.md    # [#15] x8D vs GPT-5.6/K3/Opus5/V4/... + arch deep-dive
+│   └── Depth-Context-Attention-Frameworks-2026.md  # [#24] AttnRes/KDA/mHC/Engram/CLVR + x8D map
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup
@@ -327,7 +357,10 @@ x8D-Omni-Diffusion/
 │   ├── test_spec_decode.py            # 11 tests — DSpark spec-decode quantizer
 │   ├── test_subbyte.py                # 8 tests — 32MB=32GB packed model
 │   ├── test_x8d_export.py             # x8D gguf container tests
-│   └── (test_x8d_hf.py, test_moe_disk.py)  # [#9] planned
+│   ├── test_x8d_hf.py                 # [#9] shard->gguf + MoE on-disk serving
+│   ├── test_pointer_quantize.py       # [#10] Kimi-K3 pointer map + forward-identical
+│   ├── test_quantize_hf.py            # [#17] generic HF pointer quantizer
+│   └── (test_moe_disk.py)             # [#9] planned
 │
 └── tools/
     ├── finetune_dream_v4_51_3.py      # Training tool
@@ -337,7 +370,9 @@ x8D-Omni-Diffusion/
     ├── evaluate_imageqa_mme.py
     ├── evaluate_libritts.py
     ├── compute-wer.py                 # WER eval
-    └── (quantize_kimi_k3.py)          # [#10] planned Kimi-K3 quantizer
+    ├── bench_byte_core.py             # [#14] byte-core micro-benchmarks
+    ├── quantize_kimi_k3.py            # [#10] Kimi-K3 pointer quantizer (live)
+    └── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
 ```
 
 GitHub: https://github.com/bapXai/x8D-Omni-Diffusion (branch `main`, Pages CI).
