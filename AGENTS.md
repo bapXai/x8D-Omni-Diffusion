@@ -201,30 +201,152 @@ Query testing: `tests/test_queries.py` exercises text/image/audio/binary
 queries through the full encode→mask→denoise→decode pipeline in pure Python
 (`ByteDiffusionSampler` mirrors the future torch `_sample` contract).
 
+**x8Dsub-byte repo audit (2026-07-31, #9)** — upstream `bapXai/x8Dsub-byte`
+also contains: `hf_gguf_transform.py` (HF repo→x8D .gguf), `openai_chat_server.py`
+(OpenAI-compat endpoint :666), `verify_framework_alignment.py` (500 MB lossless
+proof), `proofs/` (integrity + parameter-compression proofs, `sub_byte_vocabulary.json`),
+`BENCHMARKS.md` (28,183,891 B → 28,808 B ≈ 978:1). Our missing pieces = **`x8d_hf.py`**
+(HF→gguf) + **`moe_disk.py`** (mmap on-disk expert serving). Serving law: compressed
+state IS the running state; weights NEVER load into RAM; `/0.001` reverses live at
+query time only on the specific MoE expert needed. (#9)
+
+**Kimi-K3 pointer quantization (2026-07-31, #10)** — `tools/quantize_kimi_k3.py`
+quantizes **without downloading the model**: it pin-points each upstream HF tensor
+(repo | shard | data_offsets | dtype | shape) into an `X8DPTR01` pointer map. Weight
+bytes stay on HF disk; only the requested expert's span is Range-fetched / mmap'd and
+`/0.001`-reversed at query time. Verified on a real expert: 5,505,024 B fetched from
+the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.837 GB
+(550:1)**: U8×0.001=0.008 bit/param → 2.723 GB, BF16×0.001=0.016 → 114.4 MB. (#10)
+
+**Definitions (researched, not assumed):**
+- **Speculative decoding** = draft-verify loop. A cheap draft model (or a
+  lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;
+  the target verifies all K in ONE parallel pass; the longest matching prefix is
+  accepted and the first rejection is resampled. Output distribution is provably
+  identical to plain autoregressive decoding. In our repo it appears in
+  `x8d_spec_decode.py` as block-parallel 8x8 quantization.
+- **QAT (Quantization-Aware Training)** = fake quantization in the forward pass:
+  `x_q = (x/scale + zp).round().clamp()` then dequantize back, so training sees the
+  exact numerics the deployed low-bit model will run. The backward pass uses the
+  straight-through estimator (STE): the zero-a.e. gradient of `round` is replaced
+  by identity so weights co-adapt to quantization noise. PTQ is ~lossless at 8-bit;
+  QAT is the standard recipe below 4-bit. (#6)
+
 ---
 
-## 📁 Project Structure Rules
+## 📁 Project Structure — Full File Index
+
+Complete index of every file in the repo (regenerated 2026-07-31, #12).
 
 ```
 x8D-Omni-Diffusion/
+├── AGENTS.md                          # THIS FILE — agent behavioral rules
+├── README.md                          # Project readme (byte-native pitch)
+├── .gitignore
+├── .gitmodules                        # git submodules (if any)
+├── setup.py                           # Package setup
+├── requirements_core.txt              # ZERO-dep byte core (stdlib only)
+├── requirements_ds_gpu.txt            # Optional torch training stack
+│
+├── asset/                             # Demo media
+│   ├── asr_0.wav  s2i_0.wav  svqa_0.wav   # audio samples
+│   ├── svqa_0.jpg  vqa_0.png              # image samples
+│   ├── qualitative_results.png  teaser.png
+│   ├── speech_task.png  visual_task.png
+│
+├── configs/
+│   └── finetune.yaml                  # Training config
+│
+├── docs/
+│   └── index.html                     # GitHub Pages landing
+│
 ├── omni_diffusion/
-│   ├── models/
-│   │   └── dream/
-│   │       ├── byte_tokenizer.py      # Raw 8-bit byte tokenizer (vocab=264)
-│   │       ├── moe_layer.py           # MoE with top-2 routing
-│   │       ├── dspark_diffusion.py    # DSpark block-parallel decoding
-│   │       ├── kda_attention.py       # 3:1 KDA + Gated MLA hybrid
-│   │       ├── modeling_dream.py      # Core model (MODIFIED for bytes)
-│   │       └── configuration_dream.py # Config (vocab_size=264)
-│   ├── models/
-│   │   └── x8d_qat.py                # QAT with Straight-Through Estimator
-│   └── x8d_export.py                 # Export to x8D .gguf containers
+│   ├── __init__.py                    # Lazy package (no eager imports)
+│   ├── constants.py                   # Shared constants
+│   ├── tokenizer.py                   # Legacy Qwen2 tokenizer wrapper
+│   ├── tokenizer_magvitv2.py          # MagViT-v2 tokenizer
+│   ├── tokenizer_sensevoice_glm4voice.py  # SenseVoice/GLM4Voice tokenizer
+│   ├── x8d_export.py                  # x8D 0.001 + X8DGGUF1 U8 container
+│   ├── x8d_spec_decode.py             # DSpark 8x8 spec-decode quantizer + size report
+│   ├── x8d_subbyte.py                 # 0.016 bit/weight packed model (32MB=32GB)
+│   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter
+│   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
+│   │
+│   ├── data/
+│   │   ├── __init__.py
+│   │   ├── build.py
+│   │   ├── data_collator.py
+│   │   ├── dataset_base.py
+│   │   ├── dataset_qwen2.py           # (legacy BPE ids 151643 — needs byte fix)
+│   │   ├── utils.py
+│   │   └── processor/
+│   │       ├── __init__.py
+│   │       ├── audio_processor.py
+│   │       └── image_processor.py
+│   │
+│   └── models/
+│       ├── __init__.py                # Lazy (no imports)
+│       ├── dream/
+│       │   ├── __init__.py            # Lazy; registration via register.py
+│       │   ├── register.py            # register_dream_classes() — lazy import hook
+│       │   ├── byte_tokenizer.py      # Raw 8-bit byte tokenizer (vocab=264)
+│       │   ├── configuration_dream.py # Byte-native DreamConfig (ids 256-263)
+│       │   ├── config_dream_resume.json  # Byte-native resume config
+│       │   ├── config.yaml            # Dream model config
+│       │   ├── configuration.json     # Extra config
+│       │   ├── tokenizer_config.json  # Legacy (BPE-era) — do not use
+│       │   ├── tokenization_dream.py  # Legacy BPE — BANNED, replace via byte_tokenizer
+│       │   ├── modeling_dream.py      # Core model (embed/lm_head still old size — #2)
+│       │   ├── modeling_sensevoice.py # SenseVoice ASR head
+│       │   ├── generation_utils.py    # _sample() at line 404 — entropy_bound hook (#2)
+│       │   ├── resampler_projector.py # Audio/image resampler projector
+│       │   └── (moe_layer.py, dspark_diffusion.py, kda_attention.py)  # planned #4/#5/#7
+│       └── magvit/
+│           ├── common_modules.py
+│           ├── misc.py
+│           ├── modeling_magvitv2.py   # MagViT-v2 video tokenizer
+│           └── modeling_utils.py
+│
 ├── research/                          # Research notes, papers, experiments
-├── tests/                             # All test files
-├── configs/                           # Training configs
-├── scripts/                           # Training and eval scripts
-└── AGENTS.md                          # THIS FILE — agent behavioral rules
+│   ├── .gitkeep
+│   ├── DiffusionGemma.md              # Uniform-state diffusion + config breakdown
+│   ├── Config-Mapping-DiffusionGemma-to-x8D.md
+│   ├── Needle-Dependency-Audit.md     # dep-by-dep audit vs cactus-compute/needle
+│   ├── Training-Dataset-and-Quantization-Plan.md
+│   └── Omni-Modality-Stack.md         # [#11] Whisper/Kokoro/LTX-2.3 matrix
+│
+├── scripts/
+│   ├── set_env_ds_gpu.sh              # GPU env setup
+│   ├── deepspeed/
+│   │   ├── ds_config_zero2.json       # ZeRO-2 config
+│   │   └── diffusion_dream/
+│   │       ├── finetune.sh
+│   │       ├── evaluate_imageqa_mme.sh
+│   │       ├── evaluate_librispeech.sh
+│   │       └── evaluate_libritts.sh
+│
+├── tests/                             # ALL tests (stdlib unittest, no torch)
+│   ├── test_byte_tokenizer.py         # 18 tests — byte vocab 264
+│   ├── test_config.py                 # byte-native config defaults
+│   ├── test_queries.py                # 10 tests — full pipeline all modalities
+│   ├── test_spec_decode.py            # 11 tests — DSpark spec-decode quantizer
+│   ├── test_subbyte.py                # 8 tests — 32MB=32GB packed model
+│   ├── test_x8d_export.py             # x8D gguf container tests
+│   └── (test_x8d_hf.py, test_moe_disk.py)  # [#9] planned
+│
+└── tools/
+    ├── finetune_dream_v4_51_3.py      # Training tool
+    ├── trainer_v4_51_3.py             # Trainer
+    ├── inference.py                   # Inference tool
+    ├── evaluate_asr.py
+    ├── evaluate_imageqa_mme.py
+    ├── evaluate_libritts.py
+    ├── compute-wer.py                 # WER eval
+    └── (quantize_kimi_k3.py)          # [#10] planned Kimi-K3 quantizer
 ```
+
+GitHub: https://github.com/bapXai/x8D-Omni-Diffusion (branch `main`, Pages CI).
+HF bucket: https://huggingface.co/buckets/bapX/x8D-Omni-Diffusion (byte-native only).
 
 ---
 
