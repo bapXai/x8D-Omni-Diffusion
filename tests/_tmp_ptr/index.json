@@ -1,1 +1,0 @@
-{"metadata": {"total_size": 1000000}, "weight_map": {"language_model.model.layers.12.block_sparse_moe.experts.895.w1.weight_packed": "model-00013-of-000096.safetensors", "language_model.model.layers.12.block_sparse_moe.experts.895.w1.weight_scale": "model-00013-of-000096.safetensors", "language_model.model.layers.0.self_attn.o_proj.weight": "model-00013-of-000096.safetensors"}}

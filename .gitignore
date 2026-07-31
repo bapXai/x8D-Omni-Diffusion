@@ -171,3 +171,5 @@ TODO.txt
 
 VLMEvalKit
 VLMEvalKit/*
+
+tests/_tmp_*
