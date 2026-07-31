@@ -1,12 +1,8 @@
-# models.dream.__init__
+# models.dream.__init__ — intentionally empty.
 
-from .modeling_dream import DreamModel
-from .configuration_dream import DreamConfig  
-from .tokenization_dream import DreamTokenizer
-from transformers import AutoConfig, AutoTokenizer, AutoModel, AutoModelForCausalLM
-
-AutoConfig.register("Dream", DreamConfig)
-AutoModelForCausalLM.register(DreamConfig, DreamModel)
-
-DreamConfig.register_for_auto_class()
-DreamModel.register_for_auto_class("AutoModelForCausalLM")
+# The dream submodules are imported explicitly by callers:
+#   - `byte_tokenizer` (pure Python, no torch) is imported directly
+#   - `modeling_dream`, `configuration_dream`, `tokenization_dream`
+#     (torch/transformers) are imported by `tools/finetune_*.py` and
+#     `tools/inference.py`.
+# Keeping this file empty preserves the dependency-free byte-native core.

@@ -19,7 +19,11 @@ from transformers.generation import GenerationConfig
 
 import torchaudio
 from omni_diffusion.tokenizer import get_audio_tokenizer
-from omni_diffusion.models.dream import DreamModel,DreamConfig,DreamTokenizer
+from omni_diffusion.models.dream.modeling_dream import DreamModel
+from omni_diffusion.models.dream.configuration_dream import DreamConfig
+from omni_diffusion.models.dream.tokenization_dream import DreamTokenizer
+from omni_diffusion.models.dream.register import register_dream_classes
+register_dream_classes()
 from evaluate_asr import InferenceSampler
 
 

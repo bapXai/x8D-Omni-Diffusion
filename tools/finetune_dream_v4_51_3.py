@@ -34,7 +34,12 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 from trainer_v4_51_3 import Trainer
-from omni_diffusion.models.dream import DreamModel,DreamConfig,DreamTokenizer
+from omni_diffusion.models.dream.modeling_dream import DreamModel
+from omni_diffusion.models.dream.configuration_dream import DreamConfig
+from omni_diffusion.models.dream.tokenization_dream import DreamTokenizer
+from omni_diffusion.models.dream.register import register_dream_classes
+
+register_dream_classes()
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
