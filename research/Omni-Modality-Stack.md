@@ -15,8 +15,10 @@ input bytes (pixel/PCM) are masked on the canvas and the denoiser fills them.
 | ASR | SenseVoice (existing) | — | — | yes (modeling_sensevoice.py) | PCM→mel | text bytes |
 | TTS | Kokoro-82M (hexgrad) | 82M | Apache-2.0 | no | text bytes + voice | PCM @ 24 kHz |
 | Video | LTX-2 19B (Lightricks) | 19B | LTX-2 community | no | text/pixel bytes | pixel + PCM (joint) |
-| Video tok | MagViT-v2 (existing) | — | — | yes (models/magvit) | pixel bytes | latent frames |
 | LLM | Dream (existing) | — | — | yes (models/dream) | text/pixel/PCM bytes | byte ids 0-255 |
+
+> MagViT-v2 was REMOVED (issue #13): images/video are raw pixel byte streams
+> at ids 0-255 on the canvas — no video tokenizer required.
 
 ## Per-modality facts (from source)
 

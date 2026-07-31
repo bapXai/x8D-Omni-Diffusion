@@ -264,7 +264,6 @@ x8D-Omni-Diffusion/
 │   ├── __init__.py                    # Lazy package (no eager imports)
 │   ├── constants.py                   # Shared constants
 │   ├── tokenizer.py                   # Legacy Qwen2 tokenizer wrapper
-│   ├── tokenizer_magvitv2.py          # MagViT-v2 tokenizer
 │   ├── tokenizer_sensevoice_glm4voice.py  # SenseVoice/GLM4Voice tokenizer
 │   ├── x8d_export.py                  # x8D 0.001 + X8DGGUF1 U8 container
 │   ├── x8d_spec_decode.py             # DSpark 8x8 spec-decode quantizer + size report
@@ -299,13 +298,8 @@ x8D-Omni-Diffusion/
 │       │   ├── modeling_dream.py      # Core model (embed/lm_head still old size — #2)
 │       │   ├── modeling_sensevoice.py # SenseVoice ASR head
 │       │   ├── generation_utils.py    # _sample() at line 404 — entropy_bound hook (#2)
-│       │   ├── resampler_projector.py # Audio/image resampler projector
-│       │   └── (moe_layer.py, dspark_diffusion.py, kda_attention.py)  # planned #4/#5/#7
-│       └── magvit/
-│           ├── common_modules.py
-│           ├── misc.py
-│           ├── modeling_magvitv2.py   # MagViT-v2 video tokenizer
-│           └── modeling_utils.py
+│   │       ├── resampler_projector.py # Audio/image resampler projector
+│   │       └── (moe_layer.py, dspark_diffusion.py, kda_attention.py)  # planned #4/#5/#7
 │
 ├── research/                          # Research notes, papers, experiments
 │   ├── .gitkeep

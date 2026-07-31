@@ -1,3 +1,5 @@
-# data.__init__
+# data.__init__ — lazy: byte-native processor imports must not drag in torch.
 
-from .build import build_supervised_dataset_deepspeed
+def build_supervised_dataset_deepspeed(*args, **kwargs):
+    from .build import build_supervised_dataset_deepspeed as _impl
+    return _impl(*args, **kwargs)

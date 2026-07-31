@@ -47,9 +47,7 @@ qwen2_chat_template = """
 
 
 class S2SInference:
-    def __init__(
-        self, model_name_or_path, image_tokenizer_path
-    ):
+    def __init__(self, model_name_or_path):
 
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -87,8 +85,7 @@ class S2SInference:
         print(f"{model.generation_config=}")
 
         image_processor = ImageProcessor(
-            image_tokenizer_path,
-            'dynamic',
+            'byte-native',
             image_size=512,
             normalize_type='imagenet',
             min_patch_grid=1,
@@ -98,7 +95,6 @@ class S2SInference:
         self.model = model
         self.tokenizer = tokenizer
         self.image_processor = image_processor
-        self.image_processor.image_tokenizer.rank = 0
         self.image_processor.load_model()
         self.add_generation_prompt = True
         self.default_system_message = []
@@ -235,9 +231,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument("--model_name_or_path", type=str, required=True, help="model_name_or_path")
-    parser.add_argument(
-        "--image_tokenizer_path", type=str, required=True, help="image_tokenizer_path"
-    )
 
     parser.add_argument("--output_dir", type=str, required=True, help="output_dir")
     parser.add_argument("--mme_dir", type=str, required=True, help="mme_dir")
@@ -253,7 +246,7 @@ if __name__ == "__main__":
     torch.manual_seed(42)
 
     s2s_inference = S2SInference(
-        args.model_name_or_path, args.image_tokenizer_path
+        args.model_name_or_path
     )
 
     # ================================================================

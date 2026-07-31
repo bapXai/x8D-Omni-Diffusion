@@ -95,7 +95,7 @@ class BaseDataset(torch.utils.data.Dataset):
 
         self.processor = {}
         self.processor["image"] = ImageProcessor(
-            image_tokenizer_path,
+            "byte-native",
             process_type,
             image_size=self.image_size,
             normalize_type=normalize_type,

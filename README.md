@@ -53,10 +53,11 @@ pip install -e .
 - Download the Audio Decoder from https://huggingface.co/THUDM/glm-4-voice-decoder.
 - Put it into '../models/THUDM/glm-4-voice-decoder'
 
-#### Image Tokenizer
+#### Images are raw bytes (no tokenizer)
 
-- Download the Image Tokenizer from https://huggingface.co/showlab/magvitv2.
-- Put it into '../models/showlab/magvitv2'
+The byte-native framework needs NO image tokenizer: images are raw 8-bit byte
+streams (ids 0-255) placed between IMG_START/IMG_END on the diffusion canvas.
+MagViT-v2 was removed — see `omni_diffusion/data/processor/image_processor.py`.
 
 
 ## SFT

@@ -79,7 +79,7 @@ def extract_token_ids_as_int(text):
 
 class S2SInference:
     def __init__(
-        self, model_name_or_path, audio_tokenizer_path, audio_tokenizer_type, image_tokenizer_path, flow_path=None,
+        self, model_name_or_path, audio_tokenizer_path, audio_tokenizer_type, flow_path=None,
     ):
 
         config = AutoConfig.from_pretrained(
@@ -135,8 +135,7 @@ class S2SInference:
         )
 
         image_processor = ImageProcessor(
-            image_tokenizer_path,
-            'dynamic',
+            'byte-native',
             image_size=512,
             normalize_type='imagenet',
             min_patch_grid=1,
@@ -149,7 +148,6 @@ class S2SInference:
         self.add_generation_prompt = add_generation_prompt
         self.default_system_message = default_system_message
         self.image_processor = image_processor
-        self.image_processor.image_tokenizer.rank = 0
         self.image_processor.load_model()
 
         audio_0_id = tokenizer("<|audio_0|>").input_ids[0]
@@ -320,10 +318,9 @@ class S2SInference:
         image = None
         if len(image_tokens) > 0:
             gen_token_ids = torch.stack(image_tokens, dim=0).unsqueeze(0)
-            gen_token_ids = torch.clamp(gen_token_ids, max=8192 - 1, min=0)
-            image = self.image_processor.image_tokenizer.image_tokenizer.decode_code(gen_token_ids[:, :256]) 
-            image = torch.clamp((image + 1.0) / 2.0, min=0.0, max=1.0)
-            image *= 255.0
+            gen_token_ids = torch.clamp(gen_token_ids, max=255, min=0)
+            # byte-native: generated ids ARE raw pixel bytes (ids 0-255)
+            image = gen_token_ids[:, :256].unsqueeze(-1).repeat(1, 1, 1, 3)
             image = image.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
             image = image[:, :, :, [2, 1, 0]][0]
 
@@ -513,9 +510,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--audio_tokenizer_path", type=str, default="THUDM/glm-4-voice-tokenizer"
     )
-    parser.add_argument(
-        "--image_tokenizer_path", type=str, default="showlab/magvitv2"
-    )
     parser.add_argument("--flow_path", type=str, default="THUDM/glm-4-voice-decoder")
 
     args = parser.parse_args()
@@ -525,7 +519,6 @@ if __name__ == "__main__":
     torch_dtype = torch.bfloat16
     output_path = args.output_dir
     audio_tokenizer_path = args.audio_tokenizer_path
-    image_tokenizer_path = args.image_tokenizer_path
     flow_path = args.flow_path
     model_name_or_path = args.model_name_or_path
     audio_tokenizer_type = "sensevoice_glm4voice"
@@ -533,7 +526,7 @@ if __name__ == "__main__":
     os.makedirs(output_path, exist_ok=True)
 
     s2s_inference = S2SInference(
-        model_name_or_path, audio_tokenizer_path, audio_tokenizer_type, image_tokenizer_path, flow_path=flow_path,
+        model_name_or_path, audio_tokenizer_path, audio_tokenizer_type, flow_path=flow_path,
     )
     
     images = None

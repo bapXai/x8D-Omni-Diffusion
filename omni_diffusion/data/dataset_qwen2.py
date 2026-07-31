@@ -752,7 +752,7 @@ def preprocess(
         image_tokens_512_list = [
             processor["image"].get_image_token(x) for x in image_tokens_512_list
         ]
-        image_tokens_512_list = [x[0].tolist() for x in image_tokens_512_list]
+        image_tokens_512_list = [list(x) for x in image_tokens_512_list]
         image_tokens_512_list = ["".join(f"<|image_{i}|>" for i in x) for x in image_tokens_512_list]
 
         # for image generation
@@ -762,7 +762,7 @@ def preprocess(
         image_tokens_256_list = [
             processor["image"].get_image_token(x) for x in image_tokens_256_list
         ]
-        image_tokens_256_list = [x[0].tolist() for x in image_tokens_256_list]
+        image_tokens_256_list = [list(x) for x in image_tokens_256_list]
         image_tokens_256_list = ["".join(f"<|image_{i}|>" for i in x) for x in image_tokens_256_list]
 
         image_idx = 0

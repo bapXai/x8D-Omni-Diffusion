@@ -295,12 +295,6 @@ def init_weights(m):
         torch.nn.init.zeros_(m.bias)
 
 
-def update_tokenizer_for_magvitv2(tokenizer):
-        token_list = [f"<|image_{i}|>" for i in range(8192)]
-        num_new_tokens = tokenizer.add_tokens(token_list, special_tokens=False)
-        return tokenizer
-
-
 def load_config(model_args, data_args, training_args):
     config_kwargs = {
         "cache_dir": model_args.cache_dir,
@@ -353,7 +347,6 @@ def load_tokenizer(model_args, data_args, training_args):
     
     logger.info(f"{tokenizer.__class__.__name__=} {len(tokenizer)=}")
     tokenizer = update_tokenizer(tokenizer, model_args.audio_tokenizer_type)
-    tokenizer = update_tokenizer_for_magvitv2(tokenizer)
     logger.info(f"{tokenizer.__class__.__name__=} {len(tokenizer)=}") 
 
     return tokenizer
