@@ -112,15 +112,19 @@ class ErrorHandlingTest(unittest.TestCase):
         with self.assertRaises(ChatCompletionError):
             process_chat_completion({"model": MODEL_ID, "messages": []})
 
-    def test_stream_true_unsupported(self):
-        with self.assertRaises(ChatCompletionError) as ctx:
-            process_chat_completion({**_valid_body(), "stream": True})
-        self.assertEqual(ctx.exception.error_type, "unsupported")
-        status, payload = handle_request_body(
-            json_dumps({**_valid_body(), "stream": True})
+    def test_stream_true_uses_stream_path(self):
+        # stream: true returns None from process_chat_completion; the SSE
+        # emission is handled by handle_request_body / _process_stream (#43).
+        self.assertIsNone(process_chat_completion({**_valid_body(), "stream": True}))
+        status, payload, chunks = handle_request_body(
+            json_dumps({**_valid_body("streamed"), "stream": True}), stream=True
         )
-        self.assertEqual(status, 400)
-        self.assertEqual(payload["error"]["type"], "unsupported")
+        self.assertEqual(status, 200)
+        self.assertIsNone(payload)
+        self.assertTrue(chunks)
+        self.assertEqual(chunks[0]["object"], "chat.completion.chunk")
+        self.assertIn("streamed", chunks[0]["choices"][0]["delta"]["content"])
+        self.assertIn("usage", chunks[-1])
 
     def test_error_response_shape(self):
         err = error_response("boom", "invalid_request_error")

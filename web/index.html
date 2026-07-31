@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>x8D Omni Diffusion — Byte-Native Chat</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-mark">⬡</div>
+        <div class="brand-text">
+          <strong>x8D</strong>
+          <span>Omni Diffusion</span>
+        </div>
+      </div>
+      <button class="new-chat" id="new-chat">+ New canvas</button>
+      <div class="history" id="history"></div>
+      <div class="sysline" id="sysline">—</div>
+    </aside>
+
+    <main class="chat">
+      <header class="chat-header">
+        <span class="model-pill" id="model-pill">x8d-byte-diffusion · vocab 264</span>
+        <span class="ram-pill" id="ram-pill">RSS —</span>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="welcome">
+          <h1>Byte-native diffusion chat</h1>
+          <p>256 byte states + 8 specials. No tokens. No tokenizer.</p>
+          <p>Every message is encoded to UTF-8 bytes, masked onto a diffusion canvas, denoised, and decoded back.</p>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="composer-row">
+          <textarea id="prompt" rows="1" placeholder="Type a message… (Ctrl+Enter to send)"></textarea>
+          <button id="send" class="send" title="Send">➤</button>
+        </div>
+        <div class="composer-meta">
+          <span>usage counted in <strong>bytes</strong>, not tokens</span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -94,6 +94,34 @@ def _run_handler(method: str, path: str, raw_body: bytes = b"") -> Tuple[int, Di
     return status, payload
 
 
+def _run_handler_raw(method: str, path: str, raw_body: bytes = b"") -> Tuple[int, bytes]:
+    """Like ``_run_handler`` but returns the raw response body bytes.
+
+    Used for SSE streams and static files (which are not JSON).
+    """
+    from tools.openai_chat_server import ChatCompletionHandler
+
+    handler = object.__new__(ChatCompletionHandler)
+    handler.command = method
+    handler.path = path
+    handler.requestline = f"{method} {path} HTTP/1.0"
+    handler.request_version = "HTTP/1.0"
+    handler.protocol_version = "HTTP/1.0"
+    handler.headers = {"Content-Length": str(len(raw_body))}
+    handler.rfile = io.BytesIO(raw_body)
+    handler.wfile = io.BytesIO()
+    handler.log_message = lambda *args, **kwargs: None
+    if method == "GET":
+        handler.do_GET()
+    else:
+        handler.do_POST()
+    raw = handler.wfile.getvalue()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    status_line = head.split(b"\r\n", 1)[0].decode("latin-1")
+    status = int(status_line.split()[1])
+    return status, body
+
+
 # ---------------------------------------------------------------------------
 # Socket probe (used only by the gated live test)
 # ---------------------------------------------------------------------------
@@ -132,7 +160,44 @@ class HealthzRoutingTest(unittest.TestCase):
     def test_healthz_shape(self):
         status, payload = _run_handler("GET", "/healthz")
         self.assertEqual(status, 200)
-        self.assertEqual(payload, {"status": "ok"})
+        self.assertEqual(payload["status"], "ok")
+        self.assertIn(payload["mode"], ("memory", "disk"))
+
+    def test_healthz_disk_mode(self):
+        from tools import openai_chat_server as srv
+
+        old = srv._SERVER_MODE
+        srv._SERVER_MODE = "disk"
+        try:
+            status, payload = _run_handler("GET", "/healthz")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["mode"], "disk")
+        finally:
+            srv._SERVER_MODE = old
+
+    def test_telemetry_shape(self):
+        status, payload = _run_handler("GET", "/telemetry")
+        self.assertEqual(status, 200)
+        for key in ("label", "io_bytes", "fault_bytes", "blocks", "rss_mb"):
+            self.assertIn(key, payload)
+        self.assertEqual(payload["mode"], "memory")
+
+    def test_static_index_served(self):
+        status, body = _run_handler_raw("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"<!doctype html>", body.lower())
+
+    def test_static_app_js_served(self):
+        status, body = _run_handler_raw("GET", "/app.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"fetch(", body)
+        self.assertIn(b"stream: true", body)
+
+    def test_static_style_css_served(self):
+        status, body = _run_handler_raw("GET", "/style.css")
+        self.assertEqual(status, 200)
+        self.assertIn(b"streaming", body)
+        self.assertIn(b"--accent", body)
 
     def test_models_shape(self):
         status, payload = _run_handler("GET", "/v1/models")
@@ -147,7 +212,12 @@ class HealthzRoutingTest(unittest.TestCase):
     def test_unknown_path_404(self):
         status, payload = _run_handler("GET", "/nope")
         self.assertEqual(status, 404)
-        self.assertEqual(payload, error_response("not found: /nope"))
+        self.assertEqual(payload, error_response("not found: nope"))
+
+    def test_traversal_rejected(self):
+        status, payload = _run_handler("GET", "/../etc/passwd")
+        self.assertEqual(status, 404)
+        self.assertIn("not found", payload["error"]["message"])
 
 
 class ChatCompletionHttpTest(unittest.TestCase):
@@ -168,11 +238,31 @@ class ChatCompletionHttpTest(unittest.TestCase):
         self.assertEqual(payload["error"]["type"], "invalid_request_error")
         self.assertIn("malformed JSON", payload["error"]["message"])
 
-    def test_post_stream_true_400(self):
-        raw = json.dumps({**_valid_body(), "stream": True}).encode()
+    def test_post_stream_sse_chunks(self):
+        last_user = "stream me"
+        raw = json.dumps({**_valid_body(last_user), "stream": True}).encode()
+        status, body = _run_handler_raw("POST", "/v1/chat/completions", raw)
+        self.assertEqual(status, 200)
+        text = body.decode("utf-8")
+        chunks = [c for c in text.split("\n") if c.startswith("data: ")]
+        self.assertTrue(chunks)
+        self.assertEqual(chunks[-1].strip(), "data: [DONE]")
+        deltas = []
+        for chunk in chunks[:-1]:
+            payload = json.loads(chunk[len("data: "):])
+            self.assertEqual(payload["object"], "chat.completion.chunk")
+            self.assertEqual(payload["model"], MODEL_ID)
+            if payload["choices"]:
+                deltas.append(payload["choices"][0]["delta"]["content"])
+        joined = "".join(deltas)
+        self.assertIn(last_user, joined)
+        self.assertIn("x8D says", joined)
+
+    def test_post_stream_empty_messages_400(self):
+        raw = json.dumps({"model": MODEL_ID, "messages": [], "stream": True}).encode()
         status, payload = _run_handler("POST", "/v1/chat/completions", raw)
         self.assertEqual(status, 400)
-        self.assertEqual(payload["error"]["type"], "unsupported")
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
 
     def test_post_empty_messages_400(self):
         raw = json.dumps({"model": MODEL_ID, "messages": []}).encode()
@@ -285,6 +375,76 @@ class BytePipelineLiveTest(unittest.TestCase):
         out = sampler.denoise(canvas, steps=48, seed=0)
         self.assertEqual(len(out), 3)
         self.assertTrue(all(0 <= b <= 263 for b in out))
+
+
+class DiskRepoModeTest(unittest.TestCase):
+    """Low-RAM from-disk serving through --disk-repo (issue #45)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from omni_diffusion.x8d_export import save_gguf
+        from tools import openai_chat_server as srv
+
+        cls.srv = srv
+        cls._old_mode = srv._SERVER_MODE
+        cls._old_reader = srv._DISK_READER
+        cls.tmpdir = tempfile.mkdtemp(prefix="x8d-disk-")
+        cls.container = os.path.join(cls.tmpdir, "payload.x8d.gguf")
+        save_gguf({"canvas": bytes(range(256)) * 4}, cls.container)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv._SERVER_MODE = cls._old_mode
+        if cls._old_reader is not None:
+            cls._old_reader.close()
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_open_disk_repo_switches_mode(self):
+        self.srv._open_disk_repo(self.tmpdir)
+        try:
+            self.assertEqual(self.srv._SERVER_MODE, "disk")
+            self.assertIsNotNone(self.srv._DISK_READER)
+            self.assertEqual(self.srv._DISK_READER.names(), ["canvas"])
+        finally:
+            self.srv._DISK_READER.close()
+            self.srv._DISK_READER = None
+
+    def test_disk_mode_completion(self):
+        self.srv._open_disk_repo(self.tmpdir)
+        try:
+            status, payload = _run_handler(
+                "POST", "/v1/chat/completions", json.dumps(_valid_body("disk mode hi")).encode()
+            )
+            self.assertEqual(status, 200)
+            content = payload["choices"][0]["message"]["content"]
+            self.assertIn("mode=disk", content)
+            self.assertIn("disk mode hi", content)
+        finally:
+            self.srv._DISK_READER.close()
+            self.srv._DISK_READER = None
+            self.srv._SERVER_MODE = "memory"
+
+    def test_disk_mode_healthz(self):
+        self.srv._open_disk_repo(self.tmpdir)
+        try:
+            status, payload = _run_handler("GET", "/healthz")
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["mode"], "disk")
+        finally:
+            self.srv._DISK_READER.close()
+            self.srv._DISK_READER = None
+            self.srv._SERVER_MODE = "memory"
+
+    def test_disk_denoise_returns_text(self):
+        self.srv._open_disk_repo(self.tmpdir)
+        try:
+            text = self.srv._disk_denoise("ping")
+            self.assertIsInstance(text, str)
+            self.assertTrue(text)
+        finally:
+            self.srv._DISK_READER.close()
+            self.srv._DISK_READER = None
+            self.srv._SERVER_MODE = "memory"
 
 
 class ActiveExpertReportTest(unittest.TestCase):

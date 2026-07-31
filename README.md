@@ -96,6 +96,54 @@ The byte-native framework needs NO image tokenizer: images are raw 8-bit byte
 streams (ids 0-255) placed between IMG_START/IMG_END on the diffusion canvas.
 MagViT-v2 was removed — see `omni_diffusion/data/processor/image_processor.py`.
 
+#### Audio is raw bytes (no tokenizer)
+
+Audio is pure binary slicing too: a file IS its byte array, framed on the
+canvas as `[AUD_START(262)] + bytes + [AUD_END(263)]`. Legacy GLM-4-Voice /
+MagViT tokenizer wrappers are stripped — see
+`omni_diffusion/data/processor/audio_processor.py`.
+
+## Repository split: GitHub vs Hugging Face
+
+Two repositories hold different halves of the project:
+
+| | GitHub `bapXai/x8D-Omni-Diffusion` | HF `bapX/x8D-Omni-Diffusion` |
+|---|---|---|
+| Holds | source, docs, research, tests, web UI, tools | `trust_remote_code` runtime set: `config.json` (+ `auto_map`), `configuration_*.py`, `modeling_*.py`, `generation_config.json`, weights, README |
+| Byte-native rule | all artifacts | NO safetensors / BPE files; vocab 264, ids 256-263 |
+
+The HF model repo loads via `trust_remote_code=True`; the byte tokenizer ships
+as remote code (no `vocab.json`/`merges.txt` anywhere).
+
+## Web UI (ChatGPT-style)
+
+The OpenAI-compatible endpoint also serves a ChatGPT-style web UI:
+
+```
+python3 tools/openai_chat_server.py --port 666
+# open http://localhost:666
+```
+
+- Sidebar chat history, streaming caret, responsive layout.
+- `usage` is reported in **bytes** (byte law: tokens == bytes), never tokens.
+- Live Colibrì-style telemetry (`GET /telemetry`) — I/O bytes, blocks,
+  mean/max block µs, pin/lru hits, RSS.
+
+## Low-RAM from-disk serving (~1 GB target)
+
+Serve the byte pipeline entirely from disk — no GPU, no full-RAM model load.
+The compressed container state IS the running state: payloads are addressed
+straight out of the kernel page cache (`MappedX8DReader`, the Colibrì
+`COLI_MMAP` path) and `/0.001` is applied live to the specific payload only.
+
+```
+python3 tools/openai_chat_server.py --port 666 --disk-repo ./x8d_weights
+# /healthz -> {"status": "ok", "mode": "disk"}  |  RSS stays ~28 MB
+```
+
+See `research/Low-RAM-From-Disk-Serving-2026.md` for the mechanism analysis
+(llama.cpp / Colibrì / whisper.cpp) and benchmark tables.
+
 ## Dataset import (byte-native)
 
 Any Hugging Face dataset can be pulled straight into a byte-native x8D

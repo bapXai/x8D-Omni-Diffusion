@@ -341,6 +341,38 @@ stream, store as raw U8 `.x8dds.gguf` (0.001 law at compute ONLY — float32
 packing is byte-law-banned bloat), verify lossless via `MappedX8DReader`.
 Proof: 200-row sangraha-style shard → 20,995 B stream → 20,995 B gguf, lossless.
 
+**Web UI + low-RAM disk serving (#43/#45, 2026-07-31)** —
+`tools/openai_chat_server.py` is the OpenAI-compatible byte endpoint AND a
+ChatGPT-style web UI. `web/index.html` + `web/app.js` + `web/style.css`:
+sidebar history (localStorage), streaming caret, byte-usage meta, live
+`/telemetry` refresh, responsive. Features:
+- `POST /v1/chat/completions` supports `stream: true` → SSE frames (content
+  delta chunk → `usage` chunk → `data: [DONE]`); `usage` is BYTES (byte law).
+- `GET /telemetry` returns the Colibrì-style dashboard: io_bytes, fault_bytes,
+  blocks, mean/max block µs, hits pin/lru, rss_mb, elapsed_s, mode.
+- `GET /healthz` returns `{"status": "ok", "mode": "memory"|"disk"}`.
+- Static serving of `web/` at `/` (traversal-safe: `".."` / nested rejected).
+- `--disk-repo <dir>` = **low-RAM from-disk mode**: maps the first
+  `.gguf`/`.x8dds.gguf` via `MappedX8DReader` and serves completions by
+  reverse-slicing payload coordinates out of the kernel page cache
+  (`_disk_denoise`); RSS stays ~28 MB (measured via `/telemetry` rss_mb), no
+  GPU, ~1 GB RAM target. Colibrì `COLI_MMAP` + llama.cpp/whisper.cpp
+  mechanism; see `research/Low-RAM-From-Disk-Serving-2026.md`.
+- `tests/test_openai_server_live.py` gained static/SSE/telemetry + 4-test
+  `DiskRepoModeTest`; `tests/test_openai_server.py` stream contract updated
+  (was 400 `unsupported`, now SSE via `handle_request_body(..., stream=True)`).
+- Run: `python3 tools/openai_chat_server.py --port 666`
+  (`--disk-repo ./x8d_weights` for low-RAM mode). 304 tests OK.
+
+**Repo split GitHub vs HF (#44, 2026-07-31)** — GitHub
+`bapXai/x8D-Omni-Diffusion` holds source/build, docs/research, tests, web UI,
+tools, `CHANGELOG.md`. HF model repo `bapX/x8D-Omni-Diffusion` holds ONLY the
+`trust_remote_code` runtime set: `config.json` (with `auto_map`),
+`configuration_*.py`, `modeling_*.py`, `generation_config.json`, weights,
+README. Docs/research/AGENTS/tools/web NEVER go to HF. Byte-native rule
+stands: no safetensors/vocab.json/merges.txt anywhere. `CHANGELOG.md` tracks
+all merged work by issue number.
+
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a
   lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;
@@ -467,6 +499,7 @@ x8D-Omni-Diffusion/
 │   ├── Omni-Datasets-and-Frontier-Traces-2026.md  # [#25/#26] NVIDIA/sarvamai/ai4bharat + Fable5/Sol traces + DiffusionGemma
 │   └── Depth-Context-Attention-Frameworks-2026.md  # [#24] AttnRes/KDA/mHC/Engram/CLVR + x8D map
 │   └── Colibri-Deep-Dive-2026.md      # [#41] JustVugg/colibri 24GB-GLM-5.2 audit + mmap/telemetry port
+│   └── Low-RAM-From-Disk-Serving-2026.md  # [#45] llama.cpp/Colibrì/whisper.cpp mechanism + --disk-repo
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup
@@ -492,6 +525,8 @@ x8D-Omni-Diffusion/
 │   ├── test_x8d_mmap.py               # [#41] zero-copy mmap frame reader (Colibrì COLI_MMAP port)
 │   ├── test_x8d_telemetry.py          # [#41] per-8x8-block I/O + RSS telemetry (Colibrì telemetry.h port)
 │   ├── test_byte_processors.py        # [#42] byte-native image/audio processors + mmap JSONL import
+│   ├── test_openai_server.py          # OpenAI-compatible endpoint contract (incl. SSE stream)
+│   ├── test_openai_server_live.py     # [#43/#45] static/SSE/telemetry + DiskRepoModeTest low-RAM
 │   └── (test_moe_disk.py)             # [#9] planned
 │
 └── tools/
@@ -504,8 +539,12 @@ x8D-Omni-Diffusion/
     ├── compute-wer.py                 # WER eval
     ├── bench_byte_core.py             # [#14] byte-core micro-benchmarks
     ├── import_hf_dataset.py           # [#25] CLI: HF dataset -> x8D block-compressed
+    ├── openai_chat_server.py          # [#43/#45] OpenAI endpoint + web UI + --disk-repo low-RAM
     ├── quantize_kimi_k3.py            # [#10] Kimi-K3 pointer quantizer (live)
     └── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
+
+web/                                    # [#43] ChatGPT-style UI (index.html, app.js, style.css)
+CHANGELOG.md                            # [#44] changelog by issue number
 ```
 
 GitHub: https://github.com/bapXai/x8D-Omni-Diffusion (branch `main`, Pages CI).
