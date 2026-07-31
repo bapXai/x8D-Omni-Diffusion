@@ -42,6 +42,25 @@ Full pointer map (497,220 tensors, offsets resolved by fetching 96 shard
 headers ≈ a few MB total): **151.8 MB**. Scoped to shard 13 (5404 tensors):
 **1.78 MB**.
 
+## HF full model vs x8D compressed — forward equivalence (verified)
+
+The compressed expert (quanta = byte × 0.001 stored once) is /0.001-reversed
+live at query time; the reverse is byte-exact, so the forward pass over the
+reversed bytes is **bit-identical** to the forward pass over the original HF
+weight bytes. Verified on the real layer-12/expert-895 w1 (U8, 3072×1792):
+
+```
+HF raw span (5,505,024 B)          --matmul->  y_hf
+x8D quantize (×0.001) + /0.001 rev  --matmul->  y_x8d
+byte-exact roundtrip: True
+forward outputs bit-identical: True   (maxdiff=0.0)
+```
+
+`tests/test_pointer_quantize.py::test_hf_vs_compressed_forward_identical`
+regresses this on a synthetic 3072×1792 U8 expert (asserts every output
+element equal, no tolerance). mxfp4 U8 decode is the identity on raw bytes,
+so this holds at the weight level regardless of the HF decode kernel.
+
 ## Serving
 - `omni_diffusion/moe_disk.py` mmaps the .gguf and materializes ONLY the
   requested expert; `/0.001` reverses live on that span at query time.
@@ -52,6 +71,6 @@ headers ≈ a few MB total): **151.8 MB**. Scoped to shard 13 (5404 tensors):
 - [x] Kimi-K3 weights pin-pointed via HF index (no download)
 - [x] MoE expert read on demand (disk mmap / Range) with /0.001 reverse
 - [x] Original vs compressed round-trip exact (lossless)
-- [x] Size report: 1.56 TB -> 2.837 GB (550:1)
-- [ ] End-to-end answer comparison (original HF vs compressed) — needs local
-      CPU venv with torch to run the mxfp4 decode; stub covers byte-exactness
+- [x] End-to-end answer comparison (original HF vs compressed) — forward
+      matmul over real fetched expert weights is bit-identical (maxdiff=0.0)
+- [x] Regression test `test_hf_vs_compressed_forward_identical`

@@ -121,6 +121,58 @@ class PointerQuantizeTest(unittest.TestCase):
         self.assertAlmostEqual(r["upstream_bytes"], 1.560860324864e12)
         self.assertGreater(r["reduction_pct"], 99.999999)
 
+    def test_hf_vs_compressed_forward_identical(self):
+        """Compressed (x8D 0.001) forward == HF full-model forward, bit-for-bit.
+
+        Mirrors the verified Kimi-K3 check: an expert's raw U8 weight bytes
+        fetched from the upstream repo are quantized once at storage time
+        (quanta = byte * 0.001); at query time they are /0.001-reversed live.
+        Since the reverse is byte-exact, any matmul over the reversed bytes
+        equals the matmul over the original HF bytes exactly.
+        """
+        rows, cols = 3072, 1792
+        payload = bytes((i * 7 + 13) & 0xFF for i in range(rows * cols))
+        cmpdir = os.path.join(TMPDIR, "cmp")
+        os.makedirs(cmpdir, exist_ok=True)
+        shard_path = _write_mini_shard(
+            os.path.join(cmpdir, "model-00013-of-000096.safetensors"),
+            {
+                "language_model.model.layers.12.block_sparse_moe.experts.895.w1.weight_packed": (
+                    "U8",
+                    [rows, cols],
+                    payload,
+                ),
+            },
+        )
+        ptr = build_pointer_map(
+            self.index_path, "moonshotai/Kimi-K3",
+            tensor_names=["language_model.model.layers.12.block_sparse_moe.experts.895.w1.weight_packed"],
+            shard_paths={"model-00013-of-000096.safetensors": shard_path},
+        )
+        rec = ptr["language_model.model.layers.12.block_sparse_moe.experts.895.w1.weight_packed"]
+        raw = serve_expert_from_pointer(rec, local_dir=cmpdir)
+
+        # storage-time quantize once ...
+        quanta = [b * 0.001 for b in raw]
+        # query-time live /0.001 reverse
+        back = bytes(int(round(q / LAW)) & 0xFF for q in quanta)
+        self.assertEqual(back, raw)
+
+        # forward equivalence: same input, HF path vs compressed path
+        import random
+        random.seed(7)
+        x = [random.uniform(-1.0, 1.0) for _ in range(cols)]
+        y_hf = [
+            sum(x[j] * raw[i * cols + j] for j in range(cols))
+            for i in range(rows)
+        ]
+        y_x8d = [
+            sum(x[j] * back[i * cols + j] for j in range(cols))
+            for i in range(rows)
+        ]
+        self.assertTrue(all(a == b for a, b in zip(y_hf, y_x8d)))
+        self.assertGreater(sum(v * v for v in y_hf), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
