@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import random
+from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .x8d_export import LAW, quantize, to_u8
@@ -38,6 +39,60 @@ DEFAULT_VERIFY_LEN: int = 64
 
 #: Per-byte confidence contribution ``b / 256`` (avoid float() per position).
 _BYTE_SCALE: Tuple[float, ...] = tuple(b / 256.0 for b in range(256))
+
+#: Byte-law special ids: MASK=256 is the diffusion masking state, PAD/BOS/EOS
+#: and the IMG/AUD span markers follow. Only 0-255 are data bytes.
+MASK_ID: int = 256
+
+#: Supported modality names for the k-parallel block-mask schedules.
+MODALITIES: Tuple[str, ...] = ("text", "image", "audio", "video")
+
+
+@dataclass(frozen=True)
+class DSparkMaskConfig:
+    """k-parallel DSpark block-mask schedule for one modality.
+
+    Formalizes the DSpark block configuration: each 8x8 block (64 bytes) is
+    masked, re-noised and verified **in parallel** as one batch of ``k_blocks``
+    blocks (DiffusionGemma-style block-autoregressive canvas commit, with
+    ``canvas_length`` for the 264-byte vocab / 256-byte canvas parity).
+
+    Attributes:
+        k_blocks: number of parallel 8x8 blocks decoded per batch.
+        mask_ratio: fraction of the 64 byte positions masked per round.
+        entropy_bound: confidence threshold; positions below it are re-masked
+            and regenerated.
+        verify_clip: verification length per block; None = full 64 bytes,
+            heavy load clips to ``BLOCK_SIZE // 16``.
+        canvas_length: diffusion canvas length (DiffusionGemma parity: 256).
+        modality: one of text/image/audio/video.
+        steps: denoising/regeneration steps per block.
+    """
+
+    k_blocks: int = 8
+    mask_ratio: float = 0.7
+    entropy_bound: float = 0.001
+    verify_clip: Optional[int] = None
+    canvas_length: int = 256
+    modality: str = "text"
+    steps: int = 48
+
+
+#: Per-modality DSpark block-mask presets. Text runs the language-throughput
+#: path (deep denoise, modest masking); dense modalities mask more aggressively
+#: and decode more blocks in parallel but need fewer steps.
+DSPARK_MODALITY_SCHEDULES: Dict[str, DSparkMaskConfig] = {
+    "text": DSparkMaskConfig(),
+    "image": DSparkMaskConfig(
+        modality="image", mask_ratio=0.85, k_blocks=16, steps=32
+    ),
+    "audio": DSparkMaskConfig(
+        modality="audio", mask_ratio=0.8, k_blocks=8, steps=40
+    ),
+    "video": DSparkMaskConfig(
+        modality="video", mask_ratio=0.9, k_blocks=32, steps=24
+    ),
+}
 
 
 class SpeculativeDecodeError(ValueError):
@@ -242,6 +297,118 @@ def confidence_head_probe(
     return fn(block, step)
 
 
+def mask_block(
+    block: bytes, cfg: DSparkMaskConfig, seed: int
+) -> Tuple[List[int], List[int]]:
+    """Mask ``mask_ratio`` of the 64 byte positions to MASK(256).
+
+    Deterministic by seed: the masked positions are drawn without replacement
+    from a ``random.Random(seed)`` sampler, so a given ``(block, cfg, seed)``
+    triple always masks the same positions.
+
+    Args:
+        block: 8x8 byte block (exactly 64 bytes).
+        cfg: DSpark mask schedule.
+        seed: RNG seed selecting the masked positions.
+
+    Returns:
+        ``(masked_ids, truth_ids)`` where ``masked_ids`` holds the block with
+        masked positions replaced by MASK(256) and ``truth_ids`` holds the
+        original 64 bytes (used for verification).
+    """
+    if len(block) != BLOCK_SIZE:
+        raise ValueError(f"block must be {BLOCK_SIZE} bytes, got {len(block)}")
+    rng = random.Random(seed)
+    n_mask = int(round(cfg.mask_ratio * BLOCK_SIZE))
+    n_mask = max(0, min(BLOCK_SIZE, n_mask))
+    positions = rng.sample(range(BLOCK_SIZE), n_mask)
+    pos_set = set(positions)
+    truth = list(block)
+    masked = [MASK_ID if i in pos_set else truth[i] for i in range(BLOCK_SIZE)]
+    return masked, truth
+
+
+def renoise_block(masked: List[int], seed: int) -> List[int]:
+    """Refill MASK(256) slots with seeded random bytes 0-255.
+
+    Args:
+        masked: block with MASK(256) at masked positions.
+        seed: RNG seed for the replacement bytes.
+
+    Returns:
+        The block with every MASK slot replaced by a random byte 0-255 (no
+        MASK ids remain).
+    """
+    rng = random.Random(seed)
+    return [rng.randint(0, 255) if v == MASK_ID else v for v in masked]
+
+
+def dspark_block_generate(
+    block: bytes, cfg: DSparkMaskConfig, seed: int = 0
+) -> bytes:
+    """Run the DSpark k-parallel mask loop on one 8x8 block.
+
+    Each step, in parallel across the block: mask ``mask_ratio`` of the 64
+    byte positions to MASK(256), re-noise the masked slots with random bytes,
+    score every position with the confidence head (``_block_surrogate``-style:
+    one sha256 per block + per-byte scale), accept positions at or above the
+    ``entropy_bound`` and regenerate the rest. ``verify_clip`` honors the
+    heavy-load clip (only the first N positions are verified).
+
+    Args:
+        block: 8x8 byte block (exactly 64 bytes).
+        cfg: DSpark mask schedule.
+        seed: RNG seed (deterministic end-to-end).
+
+    Returns:
+        The generated 64 bytes.
+    """
+    if len(block) != BLOCK_SIZE:
+        raise ValueError(f"block must be {BLOCK_SIZE} bytes, got {len(block)}")
+    rng = random.Random(seed)
+    verify_len = (
+        BLOCK_SIZE if cfg.verify_clip is None else min(BLOCK_SIZE, cfg.verify_clip)
+    )
+    byte_scale = _BYTE_SCALE
+    current = bytearray(block)
+    for step in range(cfg.steps):
+        masked, _ = mask_block(bytes(current), cfg, seed=seed + step)
+        candidate = renoise_block(masked, seed=seed + step)
+        block_conf = float(_block_surrogate(bytes(candidate), step))
+        confidence = [(block_conf + byte_scale[b]) / 2.0 for b in candidate]
+        for i in range(verify_len):
+            if confidence[i] < cfg.entropy_bound:
+                candidate[i] = rng.randint(0, 255)
+        current = bytearray(candidate)
+    return bytes(current)
+
+
+def dspark_batch_mask(
+    blocks: List[bytes], cfg: DSparkMaskConfig, seed: int = 0
+) -> List[bytes]:
+    """Apply the k-parallel schedule across ``cfg.k_blocks`` blocks at a time.
+
+    The multi-modal + language throughput path: ``cfg.k_blocks`` 8x8 blocks are
+    decoded in parallel per round; each block derives its seed from the batch
+    offset so the whole batch is deterministic. A trailing partial batch (when
+    ``len(blocks)`` is not a multiple of ``k_blocks``) is processed as-is.
+
+    Args:
+        blocks: list of 8x8 byte blocks (each exactly 64 bytes).
+        cfg: DSpark mask schedule.
+        seed: base RNG seed for the batch.
+
+    Returns:
+        One generated 64-byte block per input block, in order.
+    """
+    out: List[bytes] = []
+    for start in range(0, len(blocks), cfg.k_blocks):
+        group = blocks[start : start + cfg.k_blocks]
+        for offset, block in enumerate(group):
+            out.append(dspark_block_generate(block, cfg, seed=seed + start + offset))
+    return out
+
+
 def size_report(
     num_params: int = 16_000_000_000,
     baseline_bits: int = 16,
@@ -282,3 +449,49 @@ def print_size_report(num_params: int = 16_000_000_000, baseline_bits: int = 16)
     print(f"  x8D U8 .gguf storage  : {r['x8d_storage_gb']:.2f} GB  (disk reduction {r['disk_reduction_pct']:.1f}%)")
     print(f"  Sub-byte coordinates  : {r['subbyte_coordinate_mb']:.1f} MB (coordinate reduction {r['coordinate_reduction_pct']:.2f}%)")
     print(f"  Scaling law           : {r['law']}  (0.001 x {baseline_bits} bits = {baseline_bits*LAW:.3f} bit/weight)")
+
+
+def modality_size_report(
+    num_params: int = 16_000_000_000, baseline_bits: int = 16
+) -> Dict[str, Dict[str, object]]:
+    """Per-modality size summary under each DSpark block-mask schedule.
+
+    Each modality's entry carries the generic ``size_report`` numbers plus the
+    schedule's ``mask_ratio``, ``k_blocks`` and ``steps``, so throughput paths
+    can be sized together with their diffusion configuration.
+
+    Args:
+        num_params: total parameter count for the size math.
+        baseline_bits: float width of the original checkpoint.
+
+    Returns:
+        Dict keyed by modality, each a Dict of size + schedule fields.
+    """
+    out: Dict[str, Dict[str, object]] = {}
+    for name, cfg in DSPARK_MODALITY_SCHEDULES.items():
+        row = size_report(num_params=num_params, baseline_bits=baseline_bits)
+        row["mask_ratio"] = cfg.mask_ratio
+        row["k_blocks"] = cfg.k_blocks
+        row["steps"] = cfg.steps
+        row["verify_clip"] = cfg.verify_clip
+        row["canvas_length"] = cfg.canvas_length
+        out[name] = row
+    return out
+
+
+def print_modality_size_report(
+    num_params: int = 16_000_000_000, baseline_bits: int = 16
+) -> None:
+    """Human-readable per-modality DSpark schedule + size table."""
+    print(
+        f"x8Dsub-byte 0.001 modality schedules "
+        f"({num_params:,} params, {baseline_bits}-bit baseline)"
+    )
+    print(f"  {'modality':<8}{'mask_ratio':>11}{'k_blocks':>9}{'steps':>7}{'x8d_storage_gb':>17}{'subbyte_mb':>12}")
+    for name, row in modality_size_report(
+        num_params=num_params, baseline_bits=baseline_bits
+    ).items():
+        print(
+            f"  {name:<8}{row['mask_ratio']:>11.2f}{row['k_blocks']:>9d}"
+            f"{row['steps']:>7d}{row['x8d_storage_gb']:>17.2f}{row['subbyte_coordinate_mb']:>12.1f}"
+        )

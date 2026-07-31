@@ -102,6 +102,8 @@ not trained parameters. Nothing has learned.
 | Byte-core optimization benchmarks (#14, #18-#23) | `research/Byte-Core-Optimizations.md` |
 | Frontier benchmark/arch deep-dive (#15) | `research/Frontier-Benchmarks-2026.md` |
 | Dep-by-dep audit vs cactus-compute/needle | `research/Needle-Dependency-Audit.md` |
+| OpenAI-compatible endpoint probe + active-expert report (#39) | `research/Omni-Endpoint-and-Experts-2026.md` |
+| MoE routing + omni any-to-any + diffusion-LM + byte-law justification (#40) | `research/MoE-Omni-Diffusion-Language-Modeling-2026.md` |
 
 ### 3.2 NOT documented (gaps this audit surfaced)
 
@@ -118,8 +120,9 @@ not trained parameters. Nothing has learned.
   the HF repo's `generation_config.json` (154 B, `alg="entropy_bound"`, steps 48,
   bound 0.1, canvas 256) is authoritative for distribution.
 - **OpenAI-compat server** (`tools/` + `tests/test_openai_server.py`, the
-  `:666` endpoint from upstream `bapXai/x8Dsub-byte`) exists but has no research
-  note yet; its byte-native role deserves a future doc or AGENTS.md line.
+  `:666` endpoint from upstream `bapXai/x8Dsub-byte`) — now documented in
+  `research/Omni-Endpoint-and-Experts-2026.md` (#39): probe output,
+  SARA/MoEOnDisk active-expert report, 26-test live suite.
 - **`x8d_dataset_canvas.py`** (HF repo + `staged_dir/`) has a test but no research
   write-up; it is the canvas-level dataset container sibling of `x8d_dataset.py`.
 

@@ -292,6 +292,13 @@ bytes stay on HF disk; only the requested expert's span is Range-fetched / mmap'
 the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.837 GB
 (550:1)**: U8×0.001=0.008 bit/param → 2.723 GB, BF16×0.001=0.016 → 114.4 MB. (#10)
 
+**SARA routing boundaries (#36)** — `omni_diffusion/moe_disk.py`:
+`SARABoundary` + `SARA_REGISTRY` + `SARARouter` (issue #36). Dense models
+(Kokoro-82M, Whisper large-v3, LTX-2) = single expert; internal-MoE models
+(GLM-5.2 753B, Kimi-K3 2.78T, DeepSeek-V4-Pro 1.6T) = their own isolated
+expert. Routing guarantees only the requested boundary's byte span is mmap'd +
+/0.001-reversed; boundaries are pairwise isolated by construction.
+
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a
   lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;

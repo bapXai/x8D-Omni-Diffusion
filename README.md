@@ -1,3 +1,40 @@
+---
+license: apache-2.0
+library_name: custom
+pipeline_tag: any-to-any
+tags:
+- byte-native
+- diffusion
+- masked-discrete-diffusion
+- moe
+- x8d
+- omni-modal
+- llm
+- text-generation
+- trust-remote-code
+base_model:
+- zai-org/GLM-5.2
+- moonshotai/Kimi-K3
+- deepseek-ai/DeepSeek-V4-Pro
+- hexgrad/Kokoro-82M
+- openai/whisper-large-v3
+- Lightricks/LTX-2
+language:
+- en
+- hi
+- bn
+- as
+datasets:
+- sarvamai/indic-diarbench
+- sarvamai/samvaad-hi-v1
+- sarvamai/mmlu-indic
+- nvidia/Open-SWE-Traces
+- ai4bharat/sangraha
+inference: false
+widget:
+- text: "Byte-native diffusion: 256 byte states + 8 specials (MASK/PAD/BOS/EOS/IMG/AUD), no tokenizer."
+---
+
 # x8D-Omni-Diffusion: Unified Multimodal Understanding and Generation with Masked Discrete Diffusion
 
 <font size=3><div align='center' > [[🌐 Homepage](https://bapxai.github.io/x8D-Omni-Diffusion)] [[🤗 Model Weight](https://huggingface.co/bapx/x8D-Omni-Diffusion)]</div></font>

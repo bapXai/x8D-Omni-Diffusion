@@ -18,9 +18,18 @@ from omni_diffusion.x8d_spec_decode import (  # noqa: E402
     BLOCK_SIZE,
     CONFIDENCE_THRESHOLD,
     DEFAULT_VERIFY_LEN,
+    DSPARK_MODALITY_SCHEDULES,
+    DSparkMaskConfig,
+    MASK_ID,
     SpeculativeDecodeError,
     confidence_head_probe,
+    dspark_batch_mask,
+    dspark_block_generate,
+    mask_block,
+    modality_size_report,
+    print_modality_size_report,
     print_size_report,
+    renoise_block,
     size_report,
     speculative_quantize,
     speculative_save_gguf,
@@ -170,6 +179,146 @@ class SpeculativeQuantizeTest(unittest.TestCase):
         self.assertIn("1,000,000 params, 16-bit baseline", out)
         self.assertIn("disk reduction 50.0%", out)
         self.assertIn("0.016 bit/weight", out)
+
+
+class DSparkMaskConfigTest(unittest.TestCase):
+    def test_defaults(self):
+        cfg = DSparkMaskConfig()
+        self.assertEqual(cfg.k_blocks, 8)
+        self.assertEqual(cfg.mask_ratio, 0.7)
+        self.assertEqual(cfg.entropy_bound, 0.001)
+        self.assertIsNone(cfg.verify_clip)
+        self.assertEqual(cfg.canvas_length, 256)
+        self.assertEqual(cfg.modality, "text")
+        self.assertEqual(cfg.steps, 48)
+
+    def test_frozen(self):
+        cfg = DSparkMaskConfig()
+        with self.assertRaises(Exception):
+            cfg.mask_ratio = 0.9  # type: ignore[misc]
+
+    def test_heavy_load_verify_clip(self):
+        cfg = DSparkMaskConfig(verify_clip=BLOCK_SIZE // 16)
+        self.assertEqual(cfg.verify_clip, 4)
+
+    def test_modality_schedules_distinct(self):
+        self.assertEqual(set(DSPARK_MODALITY_SCHEDULES), {"text", "image", "audio", "video"})
+        ratios = [DSPARK_MODALITY_SCHEDULES[m].mask_ratio for m in ("text", "image", "audio", "video")]
+        self.assertEqual(len(set(ratios)), 4, "each modality must have a distinct mask_ratio")
+        self.assertEqual(DSPARK_MODALITY_SCHEDULES["text"], DSparkMaskConfig())
+        self.assertEqual(DSPARK_MODALITY_SCHEDULES["image"].k_blocks, 16)
+        self.assertEqual(DSPARK_MODALITY_SCHEDULES["video"].k_blocks, 32)
+        self.assertEqual(DSPARK_MODALITY_SCHEDULES["text"].steps, 48)
+        self.assertEqual(DSPARK_MODALITY_SCHEDULES["image"].steps, 32)
+
+    def test_mask_ratio_bounds(self):
+        for cfg in DSPARK_MODALITY_SCHEDULES.values():
+            self.assertGreaterEqual(cfg.mask_ratio, 0.7)
+            self.assertLessEqual(cfg.mask_ratio, 0.9)
+            self.assertGreaterEqual(cfg.k_blocks, 8)
+            self.assertGreaterEqual(cfg.steps, 24)
+            self.assertLessEqual(cfg.steps, 48)
+
+
+class DSparkBlockMaskTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = DSparkMaskConfig()
+        self.block = bytes(range(BLOCK_SIZE))
+
+    def test_mask_block_respects_ratio(self):
+        masked, truth = mask_block(self.block, self.cfg, seed=0)
+        self.assertEqual(len(masked), BLOCK_SIZE)
+        self.assertEqual(truth, list(self.block))
+        n_masked = sum(1 for v in masked if v == MASK_ID)
+        self.assertAlmostEqual(n_masked / BLOCK_SIZE, self.cfg.mask_ratio, delta=0.05)
+        for i, v in enumerate(masked):
+            if v != MASK_ID:
+                self.assertEqual(v, self.block[i])
+
+    def test_mask_block_deterministic_by_seed(self):
+        m1, _ = mask_block(self.block, self.cfg, seed=7)
+        m2, _ = mask_block(self.block, self.cfg, seed=7)
+        self.assertEqual(m1, m2)
+        m3, _ = mask_block(self.block, self.cfg, seed=8)
+        self.assertNotEqual(m1, m3)
+
+    def test_mask_block_rejects_wrong_size(self):
+        with self.assertRaises(ValueError):
+            mask_block(bytes(10), self.cfg, seed=0)
+
+    def test_renoise_block_deterministic_no_mask_left(self):
+        masked, _ = mask_block(self.block, self.cfg, seed=1)
+        renoised = renoise_block(masked, seed=1)
+        self.assertEqual(len(renoised), BLOCK_SIZE)
+        self.assertTrue(all(0 <= v < 256 for v in renoised), "no MASK id may survive")
+        renoised2 = renoise_block(masked, seed=1)
+        self.assertEqual(renoised, renoised2)
+
+    def test_renoise_keeps_unmasked_positions(self):
+        masked, _ = mask_block(self.block, self.cfg, seed=2)
+        renoised = renoise_block(masked, seed=2)
+        for i, v in enumerate(masked):
+            if v != MASK_ID:
+                self.assertEqual(renoised[i], v)
+
+    def test_dspark_block_generate_returns_64_bytes(self):
+        out = dspark_block_generate(self.block, self.cfg, seed=0)
+        self.assertIsInstance(out, bytes)
+        self.assertEqual(len(out), BLOCK_SIZE)
+
+    def test_dspark_block_generate_deterministic_by_seed(self):
+        o1 = dspark_block_generate(self.block, self.cfg, seed=42)
+        o2 = dspark_block_generate(self.block, self.cfg, seed=42)
+        self.assertEqual(o1, o2)
+        o3 = dspark_block_generate(self.block, self.cfg, seed=43)
+        self.assertNotEqual(o1, o3)
+
+    def test_dspark_block_generate_honors_verify_clip(self):
+        cfg = DSparkMaskConfig(verify_clip=BLOCK_SIZE // 16)
+        out = dspark_block_generate(self.block, cfg, seed=0)
+        self.assertEqual(len(out), BLOCK_SIZE)
+
+    def test_dspark_block_generate_entropy_bound_regen(self):
+        # a sub-threshold bound disables regeneration entirely: all positions
+        # accepted, output is deterministic pure mask/renoise.
+        cfg = DSparkMaskConfig(entropy_bound=0.0)
+        out = dspark_block_generate(self.block, cfg, seed=5)
+        self.assertEqual(len(out), BLOCK_SIZE)
+
+    def test_dspark_batch_mask_processes_k_blocks(self):
+        blocks = [bytes((i * 7) & 0xFF for _ in range(BLOCK_SIZE)) for i in range(8)]
+        out = dspark_batch_mask(blocks, self.cfg, seed=0)
+        self.assertEqual(len(out), len(blocks))
+        self.assertTrue(all(len(b) == BLOCK_SIZE for b in out))
+        o2 = dspark_batch_mask(blocks, self.cfg, seed=0)
+        self.assertEqual(out, o2)
+
+    def test_dspark_batch_mask_uneven_batch(self):
+        blocks = [bytes(BLOCK_SIZE)] * 3
+        out = dspark_batch_mask(blocks, self.cfg, seed=1)
+        self.assertEqual(len(out), 3)
+
+    def test_modality_size_report_per_schedule(self):
+        r = modality_size_report(num_params=16_000_000_000, baseline_bits=16)
+        self.assertEqual(set(r), {"text", "image", "audio", "video"})
+        for name, row in r.items():
+            cfg = DSPARK_MODALITY_SCHEDULES[name]
+            self.assertEqual(row["mask_ratio"], cfg.mask_ratio)
+            self.assertEqual(row["k_blocks"], cfg.k_blocks)
+            self.assertEqual(row["steps"], cfg.steps)
+            self.assertAlmostEqual(row["x8d_storage_gb"], 16.0, places=6)
+
+    def test_print_modality_size_report(self):
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            print_modality_size_report(num_params=1_000_000, baseline_bits=16)
+        out = buf.getvalue()
+        self.assertIn("modality", out)
+        self.assertIn("text", out)
+        self.assertIn("video", out)
 
 
 if __name__ == "__main__":
