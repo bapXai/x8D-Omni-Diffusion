@@ -38,7 +38,7 @@ mkdir -p ${HF_HOME}
 
 export TRITON_CACHE_DIR=${CODE_PATH}
 
-export PYTHONPATH=$PYTHONPATH:${CODE_PATH}/third_party/GLM-4-Voice:${CODE_PATH}/third_party/GLM-4-Voice/third_party/Matcha-TTS/
+export PYTHONPATH=$PYTHONPATH:${CODE_PATH}
 
 ######################################################################
 LOG=${OUTPUT_DIR}/log_node${INDEX}.txt
@@ -51,9 +51,6 @@ echo ${@}
 DATA_PATH=${CODE_PATH}/configs/finetune.yaml
 
 MODEL_NAME_OR_PATH="../models/x8D-Omni-Diffusion"
-AUDIO_TOKENIZER_PATH="../models/THUDM/glm-4-voice-tokenizer"
-AUDIO_MODEL_NAME_OR_PATH="../models/FunAudioLLM/SenseVoiceSmall/model.pt"
-IMAGE_TOKENIZER_PATH="../models/magvitv2"
 
 rsync -avh ${DATA_PATH} ${OUTPUT_DIR}
 
@@ -75,10 +72,6 @@ python -m torch.distributed.run $DISTRIBUTED_ARGS tools/finetune_dream_v4_51_3.p
     --config_name ${CODE_PATH}/omni_diffusion/models/dream/config_dream_resume.json \
     --tokenizer_name $MODEL_NAME_OR_PATH \
     --model_name_or_path $MODEL_NAME_OR_PATH \
-    --audio_model_name_or_path ${AUDIO_MODEL_NAME_OR_PATH} \
-    --audio_tokenizer_path $AUDIO_TOKENIZER_PATH \
-    --audio_tokenizer_type "sensevoice_glm4voice" \
-    --image_tokenizer_path $IMAGE_TOKENIZER_PATH \
     --dataset_name $DATA_PATH \
     --bf16 True \
     --tf32 True \
@@ -114,7 +107,6 @@ python -m torch.distributed.run $DISTRIBUTED_ARGS tools/finetune_dream_v4_51_3.p
     --reset_attention_mask \
     --reset_position_ids \
     --dataloader_num_workers 1 \
-    --audio-model-freeze \
     --image_size 256 \
     --overwrite_output_dir \
 

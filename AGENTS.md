@@ -326,6 +326,21 @@ Next steps: wire `MappedX8DReader` into `moe_disk.py` SARA spans; learned
 PIN hot-store from hit histograms; expose dashboard line via /healthz; publish
 like-for-like benchmark vs upstream. See `research/Colibri-Deep-Dive-2026.md`.
 
+**Byte-native processors (#42, audited 2026-07-31)** — legacy MagViT / GLM-4-Voice
+tokenizer wrappers STRIPPED from `omni_diffusion/data/processor/`. `image_processor.py`
+and `audio_processor.py` are pure binary slicing: a file IS its byte array
+(`list(open(path,"rb").read())`), framed on the canvas as
+`[IMG_START(260)] + bytes + [IMG_END(261)]` and
+`[AUD_START(262)] + bytes + [AUD_END(263)]`. Legacy ids 256-259 are REJECTED
+(collide with MASK/PAD/BOS/EOS). `to_tensor()` imports torch lazily; the core
+stays stdlib. `dataset_base.py` call signatures preserved (positional
+`"byte-native"` + legacy kwargs ignored). `tools/import_hf_dataset.py` gained a
+zero-copy mmap JSONL path (`--jsonl`) for ai4bharat/sangraha + nvidia/Open-SWE-Traces
+shards: `mmap` the shard, flatten `text`/`code` fields, frame into an `X8DDS`
+stream, store as raw U8 `.x8dds.gguf` (0.001 law at compute ONLY — float32
+packing is byte-law-banned bloat), verify lossless via `MappedX8DReader`.
+Proof: 200-row sangraha-style shard → 20,995 B stream → 20,995 B gguf, lossless.
+
 **Definitions (researched, not assumed):**
 - **Speculative decoding** = draft-verify loop. A cheap draft model (or a
   lightweight EAGLE-3/P-EAGLE head on the target) proposes K candidate tokens;
@@ -476,6 +491,7 @@ x8D-Omni-Diffusion/
 │   ├── test_x8d_dataset.py            # [#25] HF dataset import + block-compress
 │   ├── test_x8d_mmap.py               # [#41] zero-copy mmap frame reader (Colibrì COLI_MMAP port)
 │   ├── test_x8d_telemetry.py          # [#41] per-8x8-block I/O + RSS telemetry (Colibrì telemetry.h port)
+│   ├── test_byte_processors.py        # [#42] byte-native image/audio processors + mmap JSONL import
 │   └── (test_moe_disk.py)             # [#9] planned
 │
 └── tools/
