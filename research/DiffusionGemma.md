@@ -19,6 +19,8 @@ equivalent autoregressive model. It is built on **Gemma 4** (12B backbone scaled
 - **Canvas:** 256 tokens per denoising block; up to **48 denoising steps per block**
 - **Context length:** 262,144
 - **Hardware:** 1000+ tok/s on H100; 700+ tok/s on RTX 5090; fits ~18GB VRAM when quantized
+- **Vision encoder:** Gemma 4 vision tower, 27 layers, 1152 hidden, 16×16 patches,
+  `use_bidirectional_attention: "vision"` (text stays causal)
 
 ## 2. Core Mechanism (uniform-state discrete diffusion)
 
@@ -152,6 +154,56 @@ Concrete, high-value items to borrow (in priority order):
 Not adopted: MoE scaling to 26B is post-Kim K3 insight (issue #5 already plans top-2 MoE);
 KDA hybrid attention (issue #7) replaces the "patch" idea with native modality routing.
 
+## 7b. Actual config.json breakdown (from HF repo)
+
+`google/diffusiongemma-26B-A4B-it/config.json`, model_type `diffusion_gemma`,
+architecture `DiffusionGemmaForBlockDiffusion`:
+
+### Diffusion-level
+- `canvas_length: 256`, `tie_word_embeddings: true`, dtype bfloat16
+
+### text_config (Gemma 4 MoE backbone)
+- `hidden_size: 2816`, `intermediate_size: 2112`, `moe_intermediate_size: 704`
+  (experts are small — 704-wide FFN, 128 of them)
+- `num_hidden_layers: 30`, `num_attention_heads: 16`, `head_dim: 256`
+- `num_key_value_heads: 8`, `num_global_key_value_heads: 2` (only 2 full-attention KV
+  heads — local/sliding layers use 8 KV heads, full layers use 2 global)
+- `num_experts: 128`, `top_k_experts: 8`
+- `layer_types`: sliding_attention ×6, full_attention ×1, repeating (30 layers,
+  5 full-attention layers)
+- `sliding_window: 1024`
+- RoPE is **layer-type-dependent**:
+  - full_attention: `rope_type: proportional`, `rope_theta: 1e6`,
+    `partial_rotary_factor: 0.25`
+  - sliding_attention: `rope_type: default`, `rope_theta: 10000`
+- `final_logit_softcapping: 30.0`, `hidden_activation: gelu_pytorch_tanh`,
+  `rms_norm_eps: 1e-6`, `max_position_embeddings: 262144`, `vocab_size: 262144`
+- `use_bidirectional_attention: "vision"` (bidirectional only over vision region;
+  text stays causal → confirms the encoder–denoiser switch in §3.1)
+
+### vision_config (Gemma 4 vision encoder)
+- `hidden_size: 1152`, `intermediate_size: 4304`, `num_hidden_layers: 27`,
+  `num_attention_heads: 16`, `num_key_value_heads: 16`, `head_dim: 72`
+- `patch_size: 16`, `pooling_kernel_size: 3`, `position_embedding_size: 10240`,
+  `max_position_embeddings: 131072`, `rope_theta: 100`, `standardize: true`
+
+### Special token IDs
+- `boi_token_id: 255999` (begin of image)
+- `eoi_token_id: 258882` (end of image)
+- `image_token_id: 258880` (image patch placeholder)
+- `eos_token_id: [1, 106]` (multi-stop)
+- `vision_soft_tokens_per_image: 280`
+- `bos_token_id: 2`, `pad_token_id: 0`
+
+### Mapping to x8D byte-native IDs
+DiffusionGemma allocates its multimodal specials near the end of a 262144 vocab.
+x8D compresses this to **vocab 264** — 256 bytes + 8 specials (MASK=256, PAD=257,
+BOS=258, EOS=259, IMG_START=260, IMG_END=261, AUD_START=262, AUD_END=263). The
+`boi/eoi/image` role maps onto `IMG_START/IMG_END` and image bytes are the 256 raw
+byte states; audio maps onto `AUD_START/AUD_END` (a modality DiffusionGemma lacks).
+Equivalent "3 specials + patch bytes" cost is 260 ids vs their 262144 — 1000× smaller
+vocab, which is the whole point of the byte law.
+
 ## 8. References
 
 - DeepMind model page: https://deepmind.google/models/gemma/diffusiongemma/
@@ -175,3 +227,8 @@ KDA hybrid attention (issue #7) replaces the "patch" idea with native modality r
    self-conditioning is uniquely cheap for us**.
 4. vLLM min version 0.24.0 + `vllm/vllm-openai:gemma` required for serving — noted for
    the inference stack.
+5. The 6:1 sliding:full attention pattern and the 2-global-KV-head trick are directly
+   reusable as the KDA 3:1 hybrid (issue #7): 30 layers → 15 local byte-attention +
+   10 global + 5 KDA fusion, keeping one shared hidden dim.
+6. `final_logit_softcapping: 30` and layer-type-specific RoPE (theta 1e6/0.25 partial
+   for full layers, theta 1e4 for sliding) should carry into `configuration_dream.py`.
