@@ -51,18 +51,20 @@ at query time only on the specific MoE expert needed).
   GitHub `bapXai/x8D-Omni-Diffusion` = source + docs + tests + research.
 
 ## Current focus (from todo.md)
-1. **`.x8D` re-quantization of the four models (#51/#52)** — rewrite the
-   quantizer to stream `.x8D` (no container — no `GGUF_MAGIC`/headers/manifest/
-   padding); disk = source_bytes × 0.001 (0.008 bit per weight byte); lossless
-   arithmetic coding via `omni_diffusion/x8d_arith.py`. Old HF `x8d_weights`
-   deleted (commit `060122ad`); re-quantize Whisper/Kokoro/Kimi-K3/LTX-2.
+1. **`.x8D` re-quantization of the four models (#51/#52/#55)** — the quantizer is
+   now a **resumable chunked streaming quantizer** (#55): 200 MB Range-fetch
+   chunks with retry/backoff + a `<output>.resume.json` checkpoint, so a crash
+   resumes instead of restarting (fixed the LTX-2/Kimi-K3 `TimeoutError` deaths).
+   Disk = source_bytes × 0.001 (0.008 bit per weight byte). Old HF `x8d_weights`
+   deleted (commit `060122ad`); re-quantize Whisper/Kokoro/Kimi-K3/LTX-2 **and
+   add DeepSeek-V4-Pro (1.6T, 865 GB → ~865 MB)**. Whisper + Kokoro DONE (1000:1,
+   on HF); LTX-2 / Kimi-K3 / DeepSeek-V4-Pro streaming now.
 2. **Test first** — full suite green before any upload; `.x8D` roundtrip lossless.
 3. **QAT-aware fine-tuning** — QAT/STE on the tier-0/1/2 datasets on top of the
    quantized `.x8D` weights. Scaffold shipped: `omni_diffusion/x8d_qat.py`
    (STE fake-quant, 264-vocab byte-diffusion loss, `QATConfig`) +
    `tools/finetune_qat.py` (`.x8D` load + offline loop) + `tests/test_x8d_qat.py`
-   (28 tests, full suite 389 OK). Next: hook into `trainer_v4_51_3.py` once torch
-   is available (replace the pseudo-logit surrogate with the real denoiser).
+   (28 tests). Next: hook into `trainer_v4_51_3.py` once torch is available.
 4. Upload `.x8D` weights to HF model repo `bapX/x8D-Omni-Diffusion`.
 5. Wire real expert serving (KokoroTTS `/v1/audio/speech`, etc.) from `.x8D`.
 6. GitHub Pages at `https://bapxai.github.io/x8D-Omni-Diffusion` (move index into docs/).

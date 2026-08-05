@@ -554,6 +554,36 @@ contract the torch `DreamModel._sample()` must honour, merging three designs:
 - Tests: `tests/test_x8d_byte_diffusion.py` (25). Suite: 414 OK (8 skipped),
   ResourceWarning-clean.
 
+**Resumable streaming quantizer (#55, 2026-08-06)** — real root cause of the
+LTX-2/Kimi-K3 quantization deaths was a **structural bug, not randomness**:
+`tools/quantize_hf_safetensors.py` used ONE streaming connection
+(`urllib.request.urlopen(req, timeout=120)`) and `r.read(1 MiB)` in a loop for
+hours. `timeout=120` is a per-`read()` socket timeout — any single network stall
+>120 s (HF CDN jitter, wifi blip) raised `TimeoutError: The read operation timed
+out` (ssl.py:1138) and killed the whole job (LTX-2 died at 2.82 GB streamed,
+Kimi mid-shard, both stuck at 2 MB). Fixed by rewriting the tool:
+- **Chunked Range fetching**: the body is fetched in `CHUNK_SIZE` (200 MB)
+  `bytes=begin-end` Range requests, each its own connection with 12 retries +
+  exponential backoff. A stalled chunk retries only that chunk — never the whole
+  multi-hour job.
+- **Resumable**: an atomic `<output>.resume.json` checkpoint
+  (shard/shard_consumed/bodies/source_bytes/written, tmp+fsync+rename) is saved
+  after every carry-empty chunk; a crash resumes exactly from the last persisted
+  offset instead of restarting from zero.
+- **Exactness**: `CHUNK_SIZE` is a multiple of `WEIGHTS_PER_COORD`, carry
+  persists across shard boundaries (continuous single-stream pack law), and the
+  checkpoint is only saved when the coordinate stream is fully on disk (fsync).
+  `_fetch_header` computes `data_begin = 8 + round_up(header_len, 8)` (verified
+  against a real safetensors: whisper-large-v3 header_len 149,848).
+- Tests: `tests/test_quantize_hf_stream.py` (3 offline tests via a local HTTP
+  server: dropped-connection retry, resume byte-identical to a fresh run, 0.001
+  disk law). Suite: 417 OK (8 skipped).
+- Launched (resumable, `~/x8d_models/`): **LTX-2** (Lightricks/LTX-2, 44 shards,
+  43.3 GB → ~43 MB), **Kimi-K3** (moonshotai/Kimi-K3, 96 shards, 1.56 TB →
+  ~1.56 GB), **DeepSeek-V4-Pro** (deepseek-ai/DeepSeek-V4-Pro, 64 shards,
+  865 GB → ~865 MB). Upload to `bapX/x8D-Omni-Diffusion/x8d_weights/` on
+  completion.
+
 **Sub-1-bit & byte-based competitors (#53, audited 2026-08-05 vs live web + paper)** —
 two families, both claimed by x8D (see `research/Sub1-Bit-Quantization-2026.md`):
 - **Sub-1-bit weight quantizers** (NanoQuant arXiv 2602.06694 PTQ 25.8×, 0.55-1.00
@@ -780,6 +810,7 @@ x8D-Omni-Diffusion/
 │   ├── test_byte_processors.py        # [#42] byte-native image/audio processors + mmap JSONL import
 │   ├── test_openai_server.py          # OpenAI-compatible endpoint contract (incl. SSE stream)
 │   ├── test_openai_server_live.py     # [#43/#45] static/SSE/telemetry + DiskRepoModeTest low-RAM
+│   ├── test_quantize_hf_stream.py     # [#55] resumable chunked quantizer: retry + resume + 0.001 law
 │   ├── test_x8d_media.py              # obsolete along with x8d_media.py (no commit made)
 │   └── (test_moe_disk.py, test_x8d_quanta.py, test_x8d_expert.py)  # planned #9/#48
 │
@@ -795,7 +826,8 @@ x8D-Omni-Diffusion/
     ├── import_hf_dataset.py           # [#25] CLI: HF dataset -> x8D block-compressed
     ├── openai_chat_server.py          # [#43/#45/#46] OpenAI endpoint + web UI + --disk-repo + audio/image/modal wire
     ├── quantize_kimi_k3.py            # [#10] Kimi-K3 pointer quantizer (live)
-    └── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
+    ├── quantize_hf.py                 # [#17] generic HF pointer quantizer (live)
+    └── quantize_hf_safetensors.py     # [#55] resumable chunked streaming quantizer (retry + resume)
 
 web/                                    # [#43] ChatGPT-style UI (index.html, app.js, style.css)
 CHANGELOG.md                            # [#44] changelog by issue number

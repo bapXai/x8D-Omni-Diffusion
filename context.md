@@ -254,6 +254,44 @@ Legend: ✅ done · 🟡 in progress · ❌ blocked/not done · 📌 queued
 
 ---
 
+## Prompt 2026-08-06 (#55): "What did we do so far? ... fix LTX-2/Kimi-K3, quantize DeepSeek-V4-Pro to 1000:1"
+- **Ask:** User angry that LTX-2 and Kimi-K3 quantization keeps failing ("junk"),
+  wants them fixed, and wants DeepSeek-V4-Pro quantized to 1000:1 — web research
+  for whatever is blocking, no excuses.
+- **Findings — REAL root cause (not random junk):** `tools/quantize_hf_safetensors.py`
+  used ONE streaming connection (`urlopen(req, timeout=120)`) and `r.read(1 MiB)`
+  in a loop for hours. `timeout=120` is a per-`read()` socket timeout: any single
+  network stall >120 s (HF CDN jitter) raised `TimeoutError: The read operation
+  timed out` and killed the whole job. Both logs ended in TimeoutError
+  (ssl.py:1138); LTX-2 died at 2.82 GB streamed, Kimi mid-shard, output stuck at
+  2 MB.
+- **Delivered (#55, issue opened):**
+  - Rewrote the quantizer as **chunked Range fetching + retry + resume**: body is
+    fetched in 200 MB `bytes=begin-end` Range requests, each its own connection
+    with 12 retries + exponential backoff. A stalled chunk retries only that
+    chunk, never the whole file.
+  - **Resumable**: `<output>.resume.json` checkpoint after every carry-empty
+    chunk (atomic tmp+fsync+rename); a crash resumes from the last persisted
+    offset, never restarts. Checkpoint stores shard/shard_consumed/bodies/
+    source_bytes/written; verified consistent with on-disk coord count.
+  - **Exactness**: CHUNK_SIZE is a multiple of WEIGHTS_PER_COORD; carry persists
+    across shard boundaries (continuous single-stream pack law); checkpoint only
+    saved when the coord stream is fully on disk (fsync). `_fetch_header` fixed
+    to `data_begin = 8 + round_up(header_len, 8)` (verified vs real safetensors).
+  - **NEW `tests/test_quantize_hf_stream.py`** (3 tests): retry recovers a
+    dropped connection (server closes first 2 body Ranges), resume is
+    byte-identical to a fresh run, 0.001 disk law. Full suite: **417 tests OK
+    (8 skipped)**.
+  - **Launched (all running, `~/x8d_models/` + `/tmp/x8d_q/*.log`):**
+    LTX-2 (Lightricks/LTX-2, 44 shards, 43.3 GB → ~43 MB),
+    Kimi-K3 (moonshotai/Kimi-K3, 96 shards, 1.56 TB → ~1.56 GB),
+    DeepSeek-V4-Pro (deepseek-ai/DeepSeek-V4-Pro, 64 shards, 865 GB → ~865 MB).
+    All three verified streaming with live `.resume.json` checkpoints.
+- **Status:** 🟡 in progress — jobs streaming; on completion upload `.x8D` to
+  `bapX/x8D-Omni-Diffusion/x8d_weights/`, dual-commit, close #55.
+
+---
+
 ## Standing rules derived from the prompts
 1. **Bytes not tokens**: 256-state vocabulary, no BPE/SentencePiece/WordPiece, no vocab.json/merges.txt. Embed = 264, lm_head = 264.
 2. **0.001 sub-byte law**: `Quanta[i] = weight_byte[i] × 0.001`; inverse `/0.001` ONLY at query time on the specific MoE expert. Never round at storage.

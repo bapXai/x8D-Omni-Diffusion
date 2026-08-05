@@ -6,6 +6,24 @@ GitHub issue where applicable.
 
 ---
 
+## 🗜️ Resumable streaming quantizer (#55, 2026-08-06)
+- [x] Root-cause: single `urlopen(timeout=120)` stream + `r.read(1 MiB)` loop died on
+      any stall >120 s (`TimeoutError`, ssl.py:1138) — killed LTX-2 @2.82 GB and Kimi mid-shard.
+- [x] Rewrite `tools/quantize_hf_safetensors.py`: 200 MB chunked Range fetching (own
+      connection per chunk, 12 retries + exponential backoff), `<output>.resume.json`
+      atomic checkpoint (shard/shard_consumed/bodies/source_bytes/written), carry persists
+      across shard boundaries, fsync before save, `_fetch_header` alignment fixed
+      (8 + round_up(header_len,8), verified vs real safetensors).
+- [x] NEW `tests/test_quantize_hf_stream.py` (3 tests: dropped-connection retry, resume
+      byte-identical to fresh run, 0.001 disk law). Full suite 417 OK (8 skipped).
+- [~] LTX-2 quantize streaming (Lightricks/LTX-2, 44 shards, 43.3 GB → ~43 MB) → `~/x8d_models/ltx2.x8D`
+- [~] Kimi-K3 quantize streaming (moonshotai/Kimi-K3, 96 shards, 1.56 TB → ~1.56 GB) → `~/x8d_models/kimi_k3.x8D`
+- [~] DeepSeek-V4-Pro quantize streaming (deepseek-ai/DeepSeek-V4-Pro, 64 shards, 865 GB → ~865 MB) → `~/x8d_models/deepseek_v4_pro.x8D`
+- [ ] Verify all three: disk == source_bytes × 0.001, lossless dequantize(quantize(x)) == x.
+- [ ] Upload completed `.x8D` to HF `bapX/x8D-Omni-Diffusion/x8d_weights/`; dual-commit; close #55.
+
+---
+
 ## 🗜️ .x8D Re-quantization (2026-08-01, #51/#52)
 - [x] Delete old HF `x8d_weights` (commit `060122ad`; #51/#52).
 - [x] Rewrite quantizer to `.x8D` streaming output — disk = source_bytes × 0.001

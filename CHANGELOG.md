@@ -5,7 +5,29 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
-### Added — #54 (2026-08-05)
+### Added — #55 (2026-08-06)
+- **`tools/quantize_hf_safetensors.py`** — rebuilt as a **resumable chunked
+  streaming quantizer**. Root cause of the LTX-2 / Kimi-K3 failures: one
+  streaming connection with `urlopen(timeout=120)` + `r.read(1 MiB)` loop died
+  on any single stall >120 s (`TimeoutError`, ssl.py:1138). Now the body is
+  fetched in 200 MB `bytes=begin-end` Range requests (each its own connection,
+  12 retries, exponential backoff); a `<output>.resume.json` atomic checkpoint
+  (shard/shard_consumed/bodies/source_bytes/written, tmp+fsync+rename) is
+  written after every carry-empty chunk so a crash resumes exactly instead of
+  restarting. Carry persists across shard boundaries (continuous single-stream
+  pack law), the checkpoint is only saved when the coord stream is fully on
+  disk, and `_fetch_header` uses `data_begin = 8 + round_up(header_len, 8)`
+  (verified against real safetensors).
+- **`tests/test_quantize_hf_stream.py`** — 3 offline tests (local HTTP server):
+  dropped-connection retry, resume byte-identical to a fresh run, and the 0.001
+  disk law. Full suite: **417 tests OK (8 skipped)**.
+- **Launched quantizations (all resumable, `~/x8d_models/`):** LTX-2
+  (Lightricks/LTX-2, 44 shards, 43.3 GB → ~43 MB), Kimi-K3 (moonshotai/Kimi-K3,
+  96 shards, 1.56 TB → ~1.56 GB), DeepSeek-V4-Pro (deepseek-ai/DeepSeek-V4-Pro,
+  64 shards, 865 GB → ~865 MB). Upload to `bapX/x8D-Omni-Diffusion/x8d_weights/`
+  when each completes.
+
+
 - **`omni_diffusion/x8d_byte_diffusion.py`** — merged byte-diffusion sampler
   family (stdlib-only, no torch): `masked_denoise` (DREAM/Omni-Diffusion
   absorbing-state masked transfer), `uniform_denoise` (DiffusionGemma
