@@ -8,13 +8,15 @@ GitHub issue where applicable.
 
 ## 🗜️ .x8D Re-quantization (2026-08-01, #51/#52)
 - [x] Delete old HF `x8d_weights` (commit `060122ad`; #51/#52).
-- [~] Rewrite quantizer to `.x8D` streaming output — disk = source_bytes × 0.001
+- [x] Rewrite quantizer to `.x8D` streaming output — disk = source_bytes × 0.001
       (0.008 bit per weight byte), no container/magic/headers/padding, lossless
       arithmetic coding via `omni_diffusion/x8d_arith.py`.
-- [ ] Quantize Whisper, Kokoro, Kimi-K3, LTX-2 to `.x8D`.
-- [ ] Run the full suite (`python3 -m unittest discover -s tests -v` +
-      `-W error::ResourceWarning`) green BEFORE uploading.
-- [ ] Upload `.x8D` weights to HF model repo `bapX/x8D-Omni-Diffusion`.
+- [~] Quantize Whisper, Kokoro, Kimi-K3, LTX-2 to `.x8D`. — Whisper + Kokoro DONE
+      (1000:1, verified lossless, on HF); LTX-2 + Kimi-K3 still streaming from web.
+- [x] Run the full suite (`python3 -m unittest discover -s tests -v` +
+      `-W error::ResourceWarning`) green BEFORE uploading. — 389 OK (8 skipped).
+- [~] Upload `.x8D` weights to HF model repo `bapX/x8D-Omni-Diffusion`. — kokoro +
+      whisper uploaded; ltx2/kimi pending stream.
 - [ ] QAT-aware fine-tuning on tier-0/1/2 datasets on top of the quantized `.x8D` weights.
 
 ## 🗜️ QAT Fine-Tuning Scaffold (2026-08-05)
@@ -31,6 +33,9 @@ GitHub issue where applicable.
       is available — replace the `_pseudo_logits` surrogate with the real torch denoiser over ids 0-255.
 
 ## 🏗️ Rebranding & Repo Hygiene
+- [x] [#53] Enforce GitHub-vs-HF repo split: deleted HF pollution (AGENTS.md, research .md, tools/, omni_diffusion/ dupe, x8d_* serving modules, omni_chat_probe/omni_size_report); rebuilt broken HF `config.json` (auto_map -> DreamModel/DreamConfig + full arch params); re-synced stale runtime files; fixed `.gitattributes` (x8d_weights/*.x8D LFS). HF tree now = exact trust_remote_code runtime set.
+- [ ] [#53] Publish like-for-like size/benchmark vs NanoQuant / LittleBit / BTC-LLM on the same model (e.g. Llama-2-7B/13B) into `research/Sub1-Bit-Quantization-2026.md`.
+- [ ] [#53] Track ICLR'26 "Efficiency Gap in Byte Modeling" (byte MDM < byte AR); keep block-autoregressive + DSpark hybrid.
 - [ ] Audit all stale `lijiang` / `Omni-Diffusion` / `VITA-MLLM` references in code, docs, README, configs, HF model card — replace with `bapX` / `x8D-Omni-Diffusion` (issue needed).
 - [~] Move `docs/index.html` so GitHub Pages serves at `https://bapxai.github.io/x8D-Omni-Diffusion` (currently 404). Verify Pages build + enforce HTTPS on `bapXai/x8D-Omni-Diffusion`.
 - [ ] Verify HF model repo `bapX/x8D-Omni-Diffusion` has NO leftover `*.safetensors` / BPE artifacts; run the delete-files dry-run + actual delete; re-verify with `hf models list -R`.

@@ -496,14 +496,56 @@ sidebar history (localStorage), streaming caret, byte-usage meta, live
 - Run: `python3 tools/openai_chat_server.py --port 666`
   (`--disk-repo ./x8d_weights` for low-RAM mode). 304 tests OK.
 
-**Repo split GitHub vs HF (#44, 2026-07-31)** — GitHub
+**Repo split GitHub vs HF (#44, audited 2026-08-05, #53)** — GitHub
 `bapXai/x8D-Omni-Diffusion` holds source/build, docs/research, tests, web UI,
 tools, `CHANGELOG.md`. HF model repo `bapX/x8D-Omni-Diffusion` holds ONLY the
-`trust_remote_code` runtime set: `config.json` (with `auto_map`),
-`configuration_*.py`, `modeling_*.py`, `generation_config.json`, weights,
-README. Docs/research/AGENTS/tools/web NEVER go to HF. Byte-native rule
-stands: no safetensors/vocab.json/merges.txt anywhere. `CHANGELOG.md` tracks
-all merged work by issue number.
+`trust_remote_code` runtime set (audited 2026-08-05 — pollution deleted, config
+rebuilt):
+
+```
+.gitattributes        x8d_weights/*.x8D LFS-tracked
+byte_tokenizer.py
+config.json           byte-native + FULL architecture params (hidden_size, layers...)
+config_dream_resume.json
+configuration_dream.py
+generation_config.json
+generation_utils.py
+modeling_dream.py
+modeling_sensevoice.py
+resampler_projector.py
+x8d_export.py
+README.md
+x8d_weights/          kokoro.x8D, whisper.x8D (+ ltx2/kimi when streamed)
+```
+
+- `config.json` `auto_map` MUST be `AutoConfig ->
+  configuration_dream.DreamConfig`, `AutoModelForCausalLM ->
+  modeling_dream.DreamModel` (NOT the non-existent `DreamForConditionalGeneration`
+  — that was a broken config, fixed #53). `modeling_dream.py` imports exactly
+  `configuration_dream`, `generation_utils`, `modeling_sensevoice`,
+  `resampler_projector` — all present in the set.
+- Docs/research/AGENTS/tools/web NEVER go to HF. Byte-native rule
+  stands: no safetensors/vocab.json/merges.txt anywhere. `CHANGELOG.md` tracks
+  all merged work by issue number.
+- **Re-sync check** after every runtime-file change: `hf models list
+  bapX/x8D-Omni-Diffusion -R` must match the set above; verify the runtime files
+  are not stale vs git (diff `hf cp` vs repo).
+
+**Sub-1-bit & byte-based competitors (#53, audited 2026-08-05 vs live web)** —
+two families, both claimed by x8D (see `research/Sub1-Bit-Quantization-2026.md`):
+- **Sub-1-bit weight quantizers** (NanoQuant ICML'26 PTQ 25.8×; LittleBit
+  NeurIPS'25 QAT 0.1 BPW 31×; BTC-LLM ACL'26 codebook 0.7-1.11 bit; BiLLM/STBLLM/
+  ARB-LLM ~1 bit): all LOSSY, need calibration or QAT, and their metadata pushes
+  effective bitrate to 2-4 bit. x8D 0.001 law = 0.008 bit/byte (1000:1), lossless
+  bijective, no calibration, container IS the running state.
+- **Byte-based / tokenizer-free models** (MambaByte SSM; BLT entropy-segmented
+  patches matches Llama-3 at 8B; ByteFlow coding-rate chunks; proxy compression):
+  prove bytes beat BPE at scale but run bf16/fp32 — NONE quantize to 0.001.
+  x8D is the only byte-native AND sub-byte-compressed AND disk-resident stack.
+- **One risk flag**: ICLR'26 workshop shows pure parallel byte masked-diffusion
+  (MDM) scales worse than byte AR. x8D's answer is already designed in —
+  block-autoregressive 8x8 canvas commit + DSpark speculative decode (#47), never
+  a pure parallel MDM.
 
 **vLLM-Omni gap analysis (#46, audited 2026-07-31 vs live clone)** —`vllm-project/vllm-omni` (1123 py files, Apache-2.0) is a vLLM fork that
 serves omni-modality + non-AR diffusion models. Audit findings:
@@ -682,6 +724,7 @@ x8D-Omni-Diffusion/
 │   └── Colibri-Deep-Dive-2026.md      # [#41] JustVugg/colibri 24GB-GLM-5.2 audit + mmap/telemetry port
 │   └── Low-RAM-From-Disk-Serving-2026.md  # [#45] llama.cpp/Colibrì/whisper.cpp mechanism + --disk-repo
 │   └── vLLM-Omni-Gap-Analysis-2026.md  # [#46] omni routing/UI/MTP wire map + port order
+│   └── Sub1-Bit-Quantization-2026.md  # [#53] sub-1-bit quantizers (NanoQuant/BTC-LLM/LittleBit) + byte models (MambaByte/BLT/ByteFlow) landscape
 │
 ├── scripts/
 │   ├── set_env_ds_gpu.sh              # GPU env setup

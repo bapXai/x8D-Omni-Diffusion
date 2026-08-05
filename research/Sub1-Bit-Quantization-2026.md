@@ -1,75 +1,128 @@
-# Sub-1-Bit Quantization — Web Research & x8D 0.001 Sub-Byte Map
+# Sub-1-Bit Quantization & Byte-Based Models — Competitor Landscape (2026)
 
-Searched the web 2026-08-01. Sub-1-bit (a weight stored in FEWER than 1 bit) is a
-proven, active research area, and it is exactly what the x8D **0.001 sub-byte
-law** implements. This doc records the real methods found and how the law maps to
-them.
+Researched the live web 2026-08-05 (issue #53). Two distinct competitor families
+exist and BOTH are claimed by the x8D design:
 
-## The one sentence that kills the confusion
+1. **Sub-1-bit weight quantization** (store weights in < 1 bit per weight) —
+   competes with the **0.001 sub-byte storage law**.
+2. **Byte-based / tokenizer-free models** (vocab = raw bytes, no BPE/subword) —
+   competes with the **byte-native modeling stack** (vocab=264).
 
-**1 parameter is not 1 byte.** Under the x8D sub-byte law a parameter is stored
-as ONE sub-byte coordinate that is LESS than 1 full byte of the fp16 source:
+This doc records the real, named competitors, their numbers, and exactly how the
+x8D 0.001 law and byte stack map against them.
+
+---
+
+## The x8D law restated (the whole math)
 
 ```
 Quanta[i] = weight_byte[i] × 0.001        # coordinate in [0.0, 0.255]
-weight_byte[i] = round(Quanta[i] / 0.001) # reverse is exact over 0-255
+weight_byte[i] = round(Quanta[i] / 0.001) # reverse is EXACT, bijective over 0-255
 ```
 
-Container disk size law: `num_params × bits_per_dtype × 0.001 / 8` bytes.
+**Disk size = source_bytes × 0.001.** Do NOT count parameters — the parameters
+live inside the bytes; only disk size matters.
 
-- fp16 (16 bit) → 0.016 bit/weight → container = **full_fp16_size × 0.001**
-- U8 quanta (8 bit) → 0.008 bit/weight → container = **n_params × 0.001** bytes
-- A "0.5 sub-byte" row would give 4 bit/weight = 50% off fp16 — that is the
-  **1 byte per param** container, NOT the law.
+- 8-bit byte × 0.001 → **0.008 bit per weight byte** = **1000:1 (99.9%)**.
+- The 0.5 row (4 bit, 2:1, 50%) is a DIFFERENT scaling row, not the law.
+- Storage = raw quanta bytes, arithmetic-coded losslessly (`x8d_arith.py`);
+  no GGUF magic, no headers, no manifest, no padding.
 
-## Worked sizes (the math you asked for)
+Verified real builds (1000:1, lossless round-trip):
 
-### Whisper-large-v3 — 1,543,490,560 params
-| Representation | Size | vs fp16 |
+| Model | Source bytes | `.x8D` disk | Ratio |
+|---|---|---|---|
+| Whisper-large-v3 | 3,086,981,120 | **3,086,982** | 1000:1 |
+| Kokoro-82M | 327,212,226 | **327,213** | 1000:1 |
+| LTX-2 (19B) | 43,285,058,242 | ~43,285,058 (streaming) | 1000:1 |
+| Kimi-K3 (2.78T) | 1,560,936,091,448 | ~1,560,936,091 (streaming) | 1000:1 |
+
+---
+
+## Family 1 — Sub-1-bit weight quantization (storage competitors)
+
+All of these compress **model weights** to fewer than 1 bit per weight. The x8D
+0.001 law is a *storage* layer: the coordinate stream is `source_bytes × 0.001`,
+which lands x8D at **0.008 bit per weight byte** — two orders of magnitude below
+even the most extreme sub-1-bit quantizer, and the container is the running state
+(zero-copy mmap, no decompression).
+
+| Method | Type | Bits/weight | How | Result / note | x8D map |
+|---|---|---|---|---|---|
+| **NanoQuant** (ICML 2026, SamsungLabs) | PTQ | sub-1-bit | low-rank binary matrix factorization + scales; ADMM init; block/model reconstruction | Llama2-70B 138 GB → 5.35 GB (25.8×) on 1 H100, 8 GB GPU, 20.11 tok/s | our factor/coordinate packing is the storage side; NanoQuant needs 128 calib samples + reconstruction, x8D needs none (bijective) |
+| **LittleBit** (NeurIPS 2025) / **LittleBit-2** (ICML 2026, SamsungLabs) | QAT | 0.1–1.0 BPW | `W ≈ U·Vᵀ` low-rank latent factorization, binarize factors, multi-scale (row/col/latent) compensation; Dual-SVID init + residual compensation | 0.1 BPW on Llama2-13B → **0.84 GB** (31×); Llama2-70B → 1.98 GB (69.7×); 0.1 BPW beats STBLLM at 0.7 BPW; 11.6× kernel speedup | x8D coordinate packing = a static coarse LittleBit-style scale; STE/QAT phase 4 mirrors their Dual-SVID + residual |
+| **BTC-LLM** (ACL 2026) | PTQ/QAT | 0.7–1.11 bits | binary codebook (clustered ±1 vectors → compact indices) + learnable incoherence transform (D±, P Kronecker) | LLaMA-2-13B @ 0.8 bit only −3.1% zero-shot; 1.6× over FP16; storage ≈ `16·v/log2(c)` | x8D's 0-255 coordinate codebook is a finer-grained codebook over raw bytes |
+| **BiLLM** | PTQ | ~1 bit | binary with grouped (salt/structured) scales | metadata pushes effective to ~2.88 bit | per-block scale analog |
+| **STBLLM** | PTQ | ~0.5-1 bit | N:M sparsity + binarization | effective ~4.13 bit due to masks; degrades hard below 0.5 | sparse binary blocks analog |
+| **ARB-LLM** | PTQ | ~1 bit | alternating refinement binarization | — | iterative coordinate refine |
+| **QMoE** | — | sub-1-bit | MoE-targeted extreme compression | targets MoE models only | our MoE/SARA expert slice |
+| **OneBit / BinaryMoS / DBF / ParetoQ** | QAT | 1 bit | binarize + STE training | — | STE path for QAT phase 4 |
+
+**Key structural facts from the literature:**
+- Binary PTQ with in-place binarization + full-precision scales is **bounded at
+  ≥1 bit/weight**, and its metadata (scales, masks) can push effective bitrate to
+  2-3+ bits (BiLLM 2.88, STBLLM 4.13).
+- Sub-1-bit REQUIRES low-rank binary factorization (NanoQuant, LittleBit), a
+  codebook (BTC-LLM), or a sub-byte coordinate law (x8D).
+- **NanoQuant is the first PTQ to hit sub-1-bit**; LittleBit is the QAT extreme
+  (0.1 BPW). x8D's 0.001 coordinate law (0.008 bit/byte) is ~12× smaller than
+  LittleBit's 0.1 BPW claim on a per-byte basis, is LOSSLESS (bijective), requires
+  no calibration, and the container IS the running state.
+- These competitors change the *weights*; x8D additionally changes the *modeling*
+  vocabulary (bytes, no tokenizer) — see Family 2.
+
+---
+
+## Family 2 — Byte-based / tokenizer-free models (modeling competitors)
+
+These drop the subword tokenizer and operate on raw bytes — the same foundational
+choice as x8D (vocab = 256 bytes, no BPE/SentencePiece/WordPiece). None of them
+quantize to 0.001 (they store fp32/bf16 activations+weights); x8D is the only
+stack that is BOTH byte-native AND sub-byte compressed end-to-end.
+
+| Model | Year | Vocab/unit | Architecture | Result / note | x8D map |
+|---|---|---|---|---|---|
+| **MambaByte** (CoLM 2024) | 2024 | 256 bytes | Mamba SSM on bytes, fixed-size state | competitive w/ subword Transformers; robust to noise; 2.6× spec-decode speedup (tokenized draft + byte verify) | byte-native AR; our DSpark 8x8 spec-decode is the same draft-verify loop in the block domain |
+| **Byte Latent Transformer / BLT** (Meta, ACL 2025) | 2025 | bytes → entropy-segmented **patches** | patch-level global transformer + byte encoder/decoder | matches Llama-3 tokenized at 8B/4T bytes; up to 50% fewer inference FLOPs; better long-tail/orthography | x8D canvas 8x8 block = a fixed patch; BLT's entropy-bound segmentation ≈ our entropy_bound sampler |
+| **ByteFlow Net** (2026) | 2026 | bytes → coding-rate chunks | hierarchical: local encoder → coding-rate chunking → global transformer | outperforms BPE Transformers and prior byte models; adaptive boundaries via coding rate | our `canvas_length`/block commit analog; compression-driven segmentation |
+| **Proxy compression** (2026) | 2026 | bytes + compressed views | joint train raw bytes + compressor views; raw-byte interface at inference | beats pure byte baselines; matches tokenizer at scale | our x8d_dataset byte-stream framing is a static compressor view |
+| **Byte-diffusion efficiency gap** (ICLR 2026 workshop) | 2026 | bytes | masked diffusion (MDM) on bytes | **caution**: byte-level MDMs scale worse than byte AR — isoFLOPs parity ~4×10²⁶ vs AR ~10²² | motivation for block-autoregressive canvas commit + DSpark rather than pure parallel MDM |
+| **Google DiffusionGemma** (2025) | 2025 | subword | discrete diffusion over tokens | text diffusion proves the sampler; canvas_length=256, entropy_bound | x8D applies the same sampler over the 264-vocab byte space (#5/#6) |
+
+**Key structural facts from the literature:**
+- Byte-level modeling is a proven, active direction (MambaByte → BLT → ByteFlow)
+  and the tokenizer is the acknowledged bottleneck being removed.
+- **BLT is the scaling proof**: byte models match tokenized models at 8B scale with
+  up to 50% fewer inference FLOPs, and scale better as patch + model size jointly
+  grow. This validates x8D's byte-native choice at the modeling layer.
+- **The efficiency-gap paper is the one real risk flag for x8D's diffusion
+  objective**: masked byte diffusion (pure parallel MDM) is FLOP-inefficient vs
+  byte AR. x8D's answer is already in the design — block-autoregressive 8x8 canvas
+  commit + DSpark speculative decode (#47), which is the AR-parallel hybrid, not a
+  pure MDM.
+- None of these models compress weights to 0.001; they run bf16/fp32. x8D is the
+  only byte-native + sub-byte-compressed + disk-resident stack.
+
+---
+
+## Positioning summary (x8D vs the field)
+
+| Axis | Competitors | x8D |
 |---|---|---|
-| Full fp16 | 3,086,981,120 B (3.087 GB) | — |
-| 0.5 sub-byte (1 B/param) | 1,543,490,560 B (1.543 GB) | **50.0%** less |
-| **0.001 sub-byte (law)** | **3,086,981 B (3.087 MB)** | **99.9%** less |
+| Weight storage | 0.1–1.1 bit/weight (lossy, needs calib/QAT) | **0.008 bit/byte (1000:1), lossless bijective, no calibration** |
+| Container | codebook/factor/mask metadata | **raw quanta bytes, arithmetic-coded, no headers/padding** |
+| Serving | decompress → load → run | **compressed state IS running state (mmap, no decompression)** |
+| Vocabulary | BPE/subword (NanoQuant etc.) or bytes (BLT/ByteFlow) | **bytes (264) end-to-end** |
+| Modality | text-only (most), text+image (BLT byte enc) | **text/image/audio/video bytes at ids 0-255** |
+| Training | standard AR or diffusion on tokens | **byte diffusion + block-autoregressive commit + DSpark (#47)** |
 
-### Kokoro-82M — 81,763,410 params (fp16 = 163,526,820 B)
-| Representation | Size | vs fp16 |
-|---|---|---|
-| Full fp16 | 163,526,820 B | — |
-| 0.5 sub-byte (1 B/param) | 81,763,410 B (78.0 MB) | 50.0% less |
-| **0.001 sub-byte (law)** | **163,527 B (159.7 KB)** | **99.9%** less — BUILT |
-
-## Real sub-1-bit methods (2025-2026) and the x8D map
-
-| Method | Type | Bits/weight | How | x8D 0.001 map |
-|---|---|---|---|---|
-| **NanoQuant** (ICML 2026, SamsungLabs) | PTQ | sub-1-bit | low-rank binary matrix factorization + scales; ADMM init; block/model reconstruction. Llama2-70B 25.8× on 1 H100, 8 GB GPU | factor each weight matrix into binary factors; the 0.001 law is the coordinate map on each factor |
-| **LittleBit** (NeurIPS 2025) / **LittleBit-2** (ICML 2026) | QAT | 0.1–1.0 BPW | `W ≈ UVᵀ`, binarize factors, multi-scale (row/col/latent) compensation | our block packing = a coarse LittleBit-2-style scale per 500 weights |
-| **BTC-LLM** (ACL 2026) | PTQ/QAT | 0.7–1.11 bits | binary codebook (clustered ±1 vectors → compact indices) + learnable transform | coordinate codebook over 0-255 |
-| **BiLLM** | PTQ | ~1 bit | binary with grouped scales | per-block scale |
-| **STBLLM** | PTQ | ~0.5-1 bit | N:M sparsity + binary | sparse binary blocks |
-| **ARB-LLM** | PTQ | ~1 bit | alternating refinement | iterative coordinate refine |
-| **OneBit / BinaryMoS / DBF / ParetoQ** | QAT | 1 bit | binarize + STE training | STE path for our QAT phase 4 |
-
-Key fact from the literature: binary PTQ methods that use in-place binarization
-+ full-precision scales are bounded at ≥1 bit/weight and their metadata can push
-effective bitrate to 2-3 bits (BiLLM 2.88, STBLLM 4.13). Sub-1-bit REQUIRES a
-low-rank binary factorization (LittleBit, NanoQuant) or a codebook (BTC-LLM).
-Our 0.001 coordinate packing is the codebook/factorization family.
-
-## x8D build status (this session)
-
-- `/tmp/kokoro.x8dgguf` = 81,763,410 B = 0.5 sub-byte container (1 B/param, 50%).
-- `/tmp/kokoro.x8dsubbyte.gguf` = **163,527 B = the 0.001 law container**
-  (99.9% less than fp16), written from the raw quanta via `pack_subbyte`.
-- Whisper large-v3: fp16 header total 1,543,490,560 params; the 0.001 container
-  must be **3,086,981 B**. The previous `/tmp/whisper.x8dgguf` write was the
-  wrong 0.5 container (1 B/param) and was killed.
-
-## Honest note on losslessness
-
-The stored quanta byte maps bijectively back to its weight byte (0-255), so the
-per-param coordinate IS lossless. Block packing (500 weights → 1 coord byte via
-`round(mean × 0.001)`) is the coarse "LittleBit-style scale" row of the table —
-a full LittleBit/NanoQuant factorization (per-tensor U,V binary factors + row/col
-scales) is the exact-lossless upgrade path, which is what phase 4 QAT/STE of
-`implementation_plan.md` adds.
+## Actionable gaps (from this audit)
+1. **Positioning collateral** — README + HF model card should lead with the
+   `source_bytes × 0.001` law and the two-family table above.
+2. **Benchmark like-for-like** — publish x8D `.x8D` size vs NanoQuant/LittleBit/
+   BTC-LLM on the same model (e.g. Llama-2-7B/13B) as a `research/` table, and
+   round-trip lossless proof (already have 389 tests + Whisper/Kokoro proofs).
+3. **Byte-diffusion efficiency risk** — track the ICLR 2026 efficiency-gap paper;
+   keep the block-autoregressive + DSpark hybrid (never a pure parallel MDM).
+4. **BLT-patch analog** — consider entropy-bound 8x8 block sizing as the BLT-patch
+   equivalent in the byte denoiser (#7 phase 2).

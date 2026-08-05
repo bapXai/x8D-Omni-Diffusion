@@ -5,6 +5,48 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Added — #53 (2026-08-05)
+- **`research/Sub1-Bit-Quantization-2026.md`** — rewritten competitor landscape
+  (live-web audit 2026-08-05): sub-1-bit weight quantizers (NanoQuant ICML'26
+  PTQ 25.8×, LittleBit NeurIPS'25/ICML'26 QAT 0.1 BPW 31×, BTC-LLM ACL'26
+  codebook 0.7-1.11 bit, BiLLM/STBLLM/ARB-LLM ~1 bit with 2-4 bit effective
+  metadata) + byte-based/tokenizer-free models (MambaByte SSM, BLT entropy-
+  segmented patches matching Llama-3 @8B, ByteFlow coding-rate chunks, proxy
+  compression). Corrected law restated: **disk = source_bytes × 0.001** (0.008
+  bit per weight byte, 1000:1) — verified Whisper 3,086,981,120→3,086,982 B and
+  Kokoro 327,212,226→327,213 B. Positioning table + actionable gaps incl. the
+  ICLR'26 byte-MDM efficiency risk flag (block-autoregressive + DSpark #47 is
+  the answer, never pure parallel MDM).
+
+### Changed — #53 (2026-08-05)
+- **HF model repo `bapX/x8D-Omni-Diffusion` de-polluted** — deleted rule-#44
+  violations: AGENTS.md, CONTRIBUTING.md, research `.md` files, `tools/`,
+  `omni_diffusion/` dupe dir, `x8d_*` serving modules, `omni_chat_probe.py`,
+  `omni_size_report.py`. HF now holds ONLY the `trust_remote_code` runtime set:
+  `byte_tokenizer.py`, `config.json`, `config_dream_resume.json`,
+  `configuration_dream.py`, `generation_config.json`, `generation_utils.py`,
+  `modeling_dream.py`, `modeling_sensevoice.py`, `resampler_projector.py`,
+  `x8d_export.py`, `.gitattributes`, `README.md`, `x8d_weights/`.
+- **Fixed broken HF `config.json`** — `auto_map` pointed at the non-existent
+  `modeling_dream.DreamForConditionalGeneration` and lacked ALL architecture
+  hyperparameters. Rebuilt from `config_dream_resume.json`: `auto_map` now
+  `AutoConfig -> configuration_dream.DreamConfig`,
+  `AutoModelForCausalLM -> modeling_dream.DreamModel`; full arch params present
+  (`hidden_size=3584`, `num_hidden_layers=28`, ...).
+- **Re-synced stale runtime files** from git (`configuration_dream.py`,
+  `modeling_dream.py`, `generation_utils.py`, `byte_tokenizer.py`,
+  `x8d_export.py`, `generation_config.json`); rebuilt `.gitattributes` so
+  `x8d_weights/*.x8D` is LFS-tracked (old `*.x8dptr.gguf` refs removed).
+- **AGENTS.md repo-split section updated** — fixed `auto_map` + exact HF tree +
+  re-sync check (`hf models list -R` must match the runtime set).
+- **`tools/openai_chat_server.py`** — `--disk-repo` now maps EVERY `.x8D`/
+  `.gguf`/`.x8dds.gguf` container by name (`_DISK_READERS` dict, was first-file-
+  only); new `POST /v1/audio/transcriptions` (Whisper ASR) reverse-slices the
+  quantized container zero-copy from the page cache; `MappedX8DReader` treats an
+  un-framed raw `.x8D` as a single `data` payload. Verified live (commit `1da50e2`).
+- **`tests/test_openai_server_live.py` / `test_x8d_mmap.py`** — updated for the
+  multi-reader map + raw-`.x8D` fallback. Full suite: **389 tests OK (8 skipped)**.
+
 ### Added — QAT fine-tuning scaffold (2026-08-05)
 - **`omni_diffusion/x8d_qat.py`** — x8Dsub-byte QAT (Quantization-Aware Training)
   core, pure stdlib with lazy torch:

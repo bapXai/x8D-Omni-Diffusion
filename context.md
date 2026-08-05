@@ -162,6 +162,50 @@ Legend: ✅ done · 🟡 in progress · ❌ blocked/not done · 📌 queued
 
 ---
 
+## Prompt 2026-08-05 (#53): "what need to be in the repo in git what need to be in the hf research and fix those comparing competitors who is doing sub1bit models and quantisation or bytes based model"
+- **Ask:** (1) enforce/define what lives in GitHub vs the HF model repo, (2) fix
+  the HF repo to match, (3) research and document competitors doing sub-1-bit
+  quantization OR byte-based/tokenizer-free models.
+- **Findings — HF audit:** `bapX/x8D-Omni-Diffusion` was polluted with
+  AGENTS.md/CONTRIBUTING.md/research `.md`/tools/`omni_diffusion/`-dupe/
+  `x8d_*`-serving-modules/`omni_chat_probe.py`/`omni_size_report.py` (rule #44
+  violations). Worse, `config.json` was BROKEN: `auto_map` pointed at the
+  non-existent `modeling_dream.DreamForConditionalGeneration` and it lacked ALL
+  architecture hyperparameters (hidden_size=3584, 28 layers, ...). Deleted the
+  pollution; rebuilt `config.json` from `config_dream_resume.json` with correct
+  `auto_map` -> `AutoConfig: configuration_dream.DreamConfig`,
+  `AutoModelForCausalLM: modeling_dream.DreamModel`; re-synced stale runtime
+  files (configuration_dream/modeling_dream/generation_utils/byte_tokenizer/
+  x8d_export/generation_config) from git; rebuilt `.gitattributes`
+  (`x8d_weights/*.x8D` LFS-tracked). Final HF set (commit 109cd09d) =
+  byte_tokenizer.py, config.json, config_dream_resume.json,
+  configuration_dream.py, generation_config.json, generation_utils.py,
+  modeling_dream.py, modeling_sensevoice.py, resampler_projector.py,
+  x8d_export.py, .gitattributes, README.md, x8d_weights/kokoro.x8D +
+  whisper.x8D. Verified `modeling_dream.py` only imports the 4 modules present
+  (configuration_dream/generation_utils/modeling_sensevoice/resampler_projector).
+- **Findings — competitors (live web, 2026-08-05):** two families. (1)
+  Sub-1-bit weight quantizers: NanoQuant (ICML'26, PTQ low-rank binary
+  factorization, 70B 138→5.35 GB 25.8×), LittleBit/LittleBit-2 (NeurIPS'25/
+  ICML'26, QAT 0.1 BPW, Llama2-13B→0.84 GB 31×), BTC-LLM (ACL'26, codebook
+  0.7-1.11 bit, −3.1% @0.8 bit), BiLLM/STBLLM/ARB-LLM (~1 bit, metadata pushes
+  effective 2-4 bit). All LOSSY, need calibration/QAT. (2) Byte-based models:
+  MambaByte (SSM on bytes), BLT (Meta, entropy-segmented patches, matches
+  Llama-3 @8B/4T, ≤50% fewer FLOPs), ByteFlow Net (coding-rate chunks), proxy
+  compression — all bf16/fp32, NONE quantize to 0.001. Risk flag: ICLR'26
+  workshop "Efficiency Gap in Byte Modeling" — pure parallel byte masked
+  diffusion scales worse than byte AR; x8D already designs around it via
+  block-autoregressive 8x8 commit + DSpark (#47).
+- **Delivered:** HF cleaned + config fixed (#53); `research/Sub1-Bit-Quantization-2026.md`
+  rewritten with the corrected `source_bytes × 0.001` law, both competitor
+  families, x8D positioning table, and actionable gaps; AGENTS.md repo-split
+  section updated (fixed `auto_map` + HF tree + re-sync check) + #53 research
+  entry.
+- **Status:** ✅ done. Open: upload ltx2/kimi `.x8D` when streaming finishes;
+  publish like-for-like benchmark vs NanoQuant/LittleBit/BTC-LLM.
+
+---
+
 ## Standing rules derived from the prompts
 1. **Bytes not tokens**: 256-state vocabulary, no BPE/SentencePiece/WordPiece, no vocab.json/merges.txt. Embed = 264, lm_head = 264.
 2. **0.001 sub-byte law**: `Quanta[i] = weight_byte[i] × 0.001`; inverse `/0.001` ONLY at query time on the specific MoE expert. Never round at storage.
