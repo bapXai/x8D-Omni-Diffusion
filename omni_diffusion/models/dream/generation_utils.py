@@ -579,9 +579,6 @@ class DreamGenerationMixin:
                         # current block are pinned out of the budget.
                         block_mask_1 = block_mask[mask_index[0]]
                         pinned = torch.where(
-                            block_mask_1, torch.zeros_like(entropy), entropy
-                        )
-                        pinned = torch.where(
                             block_mask_1, entropy, torch.full_like(entropy, float("inf"))
                         )
                         order = torch.argsort(pinned)
