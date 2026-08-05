@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Tests for the packed 0.016 bit/weight sub-byte model (32 MB = full 32 GB)."""
+"""Tests for the packed 0.008 bit/weight sub-byte model (1000:1, per-byte law)."""
 
 import os
 import struct
@@ -10,10 +10,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from omni_diffusion.x8d_subbyte import (  # noqa: E402
     BITS_PER_WEIGHT,
-    SUB_BYTE_MAGIC,
     WEIGHTS_PER_COORD,
     SubByteModel,
-    SubByteHeaderError,
     coords_per_pack,
     load_subbyte_gguf,
     mmap_load_subbyte_gguf,
@@ -29,17 +27,17 @@ from omni_diffusion.x8d_subbyte import (  # noqa: E402
 
 
 class SubBytePackingTest(unittest.TestCase):
-    def test_size_16b_is_32mb(self):
-        self.assertEqual(packed_size_bytes(16_000_000_000), 32_000_000)
-        self.assertEqual(BITS_PER_WEIGHT, 0.016)
-        self.assertEqual(WEIGHTS_PER_COORD, 500)
+    def test_size_16b_is_16mb(self):
+        self.assertEqual(packed_size_bytes(16_000_000_000), 16_000_000)
+        self.assertEqual(BITS_PER_WEIGHT, 0.008)
+        self.assertEqual(WEIGHTS_PER_COORD, 1000)
 
     def test_size_report_equivalence(self):
         r = size_report_subbyte(16_000_000_000, baseline_bits=16)
         self.assertAlmostEqual(r["full_precision_gb"], 32.0)
-        self.assertAlmostEqual(r["subbyte_mb"], 32.0)
-        self.assertAlmostEqual(r["reduction_pct"], 99.9, places=6)
-        self.assertAlmostEqual(r["bits_per_weight"], 0.016)
+        self.assertAlmostEqual(r["subbyte_mb"], 16.0)
+        self.assertAlmostEqual(r["reduction_pct"], 99.95, places=6)
+        self.assertAlmostEqual(r["bits_per_weight"], 0.008)
 
     def test_quanta_pointer_map_roundtrip(self):
         for w in range(256):
@@ -72,7 +70,8 @@ class SubBytePackingTest(unittest.TestCase):
             path, _ = save_subbyte_gguf(name, data, tmp)
             mapping, meta = mmap_load_subbyte_gguf(path)
             try:
-                self.assertEqual(meta["packed_size"], os.path.getsize(path) - 20 - len(name))
+                # magic-free layout: <u64 num_params><u32 name_len><name><packed>
+                self.assertEqual(meta["packed_size"], os.path.getsize(path) - 12 - len(name))
             finally:
                 mapping.close()
         finally:
@@ -141,13 +140,18 @@ class SubBytePackingTest(unittest.TestCase):
             if os.path.exists(tmp):
                 os.remove(tmp)
 
-    def test_bad_magic_raises(self):
-        tmp = os.path.join(os.path.dirname(__file__), "_tmp_bad.gguf")
-        with open(tmp, "wb") as f:
-            f.write(b"NOTSUB" + os.urandom(32))
+    def test_container_is_magic_free(self):
+        # The container is raw packed coordinates with no X8DSUB01 magic.
+        tmp = os.path.join(os.path.dirname(__file__), "_tmp_magicfree.gguf")
+        data = os.urandom(1024)
         try:
-            with self.assertRaises(SubByteHeaderError):
-                load_subbyte_gguf(tmp)
+            path, _ = save_subbyte_gguf("model.weight", data, tmp)
+            with open(path, "rb") as f:
+                blob = f.read()
+            self.assertNotIn(b"X8DSUB01", blob)
+            payloads, meta = load_subbyte_gguf(path)
+            self.assertEqual(set(payloads), {"model.weight"})
+            self.assertEqual(meta["num_params"], len(data))
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
@@ -162,8 +166,8 @@ class SubBytePackingTest(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("16,000,000,000", out)
         self.assertIn("32.00 GB", out)
-        self.assertIn("32.0 MB", out)
-        self.assertIn("0.016 bit/weight", out)
+        self.assertIn("16.0 MB", out)
+        self.assertIn("0.008 bit/weight", out)
 
 
 if __name__ == "__main__":

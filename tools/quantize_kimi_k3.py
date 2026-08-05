@@ -33,8 +33,6 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from omni_diffusion.x8d_export import GGUF_MAGIC  # noqa: E402
-
 #: Magic for pointer-map containers.
 PTR_MAGIC = b"X8DPTR01"
 

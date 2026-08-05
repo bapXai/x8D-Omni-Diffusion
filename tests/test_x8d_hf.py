@@ -10,7 +10,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from omni_diffusion.moe_disk import X8DGgufReader, MoEOnDisk  # noqa: E402
-from omni_diffusion.x8d_export import GGUF_MAGIC, save_gguf  # noqa: E402
+from omni_diffusion.x8d_export import save_gguf  # noqa: E402
 from omni_diffusion.x8d_hf import (  # noqa: E402
     SafetensorsShard,
     convert_shard_to_gguf,
@@ -79,7 +79,14 @@ class X8DHfTest(unittest.TestCase):
         self.assertEqual(stats["bytes_in"], 16)
         self.assertEqual(stats["bytes_out"], 16)
         with open(path, "rb") as f:
-            self.assertEqual(f.read(len(GGUF_MAGIC)), GGUF_MAGIC)
+            blob = f.read()
+        # magic-free: no X8DGGUF1 prefix
+        self.assertNotIn(b"X8DGGUF1", blob)
+        # header-free framing: <u32 name_len><name><u64 data_len><data>
+        self.assertEqual(
+            os.path.getsize(path),
+            stats["bytes_out"] + 4 + len("layers.0.experts.3.w1") + 8,
+        )
 
     def test_convert_shard_to_gguf_all(self):
         out = os.path.join(TMPDIR, "all.gguf")

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unittest
 
-from omni_diffusion.x8d_export import GGUF_MAGIC, save_gguf, X8D_HEADER
+from omni_diffusion.x8d_export import save_gguf
 from omni_diffusion.x8d_mmap import (
     BLOCK_SIZE,
     X8DDS_MAGIC,
@@ -71,7 +71,8 @@ class MappedX8DReaderTest(unittest.TestCase):
             self.assertEqual(r.load("w2"), b"\x00\xff")
             offset, length = r.offsets("w1")
             self.assertEqual(length, 256)
-            self.assertTrue(offset >= 16)
+            # header-free container: "w1" payload sits at 4 + 2 + 8
+            self.assertEqual(offset, 4 + 2 + 8)
             self.assertEqual(r.slice_at(offset, 256), bytes(range(256)))
 
     def test_zero_copy_view(self):

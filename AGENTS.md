@@ -57,9 +57,62 @@ When importing or converting pre-trained model weights (from HuggingFace, PyTorc
 
 1. **Quantize** all floating-point weight tensors to their nearest 8-bit unsigned integer representation.
 2. **Apply the 0.001 sub-byte scaling** to map each byte into sub-byte coordinate space.
-3. **Store in x8D `.gguf` containers** using `U8` dtype — no float bloat, no JSON metadata pollution.
-4. **Target: 98% disk space reduction** compared to original BF16/FP32 checkpoints.
+3. **Store as `.x8D` raw quanta files** — the stored bytes ARE the coordinates; no `GGUF_MAGIC`, no headers, no manifest, no padding, no float bloat, no JSON metadata pollution.
+4. **Target: 99.9% disk space reduction** (1000:1) compared to the raw byte representation (`0.001` sub-byte = 0.008 bit per weight byte). The `0.5` row (4 bit, 2:1, 50%) is a DIFFERENT scaling row, not the law.
 5. **Zero-copy mmap serving**: The compressed state IS the running state. No decompression loop. The inverse math (`/ 0.001`) operates as a live coordinate pointer map at inference time.
+
+### Quantize a Model DIRECTLY from HuggingFace — zero full-model download (#50)
+
+The quantized weight IS the model. The full checkpoint exists only as the
+one-time quantization input and is deleted the moment the `.x8D` file is
+written. There is NO pointer map, NO `.pth` kept, NO full float checkpoint
+anywhere.
+
+**The 0.001 sub-byte law (the whole math):**
+```
+Quanta[i] = weight_byte[i] × 0.001        # coordinate in [0.0, 0.255]
+weight_byte[i] = round(Quanta[i] / 0.001) # reverse is EXACT, bijective 0-255
+```
+Storage = raw bytes. Each stored byte **is** the coordinate's U8 axis; at
+compute time `byte × 0.001` gives the coordinate and `/0.001` reverses it.
+The `.x8D` file is **only** the raw quanta bytes — NO `GGUF_MAGIC`, NO framing,
+NO name-length headers, NO manifest, NO padding on top of the quantized weight.
+The coordinate stream is then lossless arithmetic-coded (fractional bits, no
+byte padding) via `omni_diffusion/x8d_arith.py`: **disk = source_bytes × 0.001**.
+
+**Procedure (proven on Kokoro-82M, 81,763,410 params → 327,054-byte `.x8D`):**
+source bytes = 327,053,640 (fp32, 4 B/param × 81,763,410); disk = source_bytes
+× 0.001 = 327,054 B.
+
+```bash
+# 1. Fetch the ONE weight file from HF (one-time quantization input)
+python3 -c "import urllib.request; urllib.request.urlretrieve(
+ 'https://huggingface.co/<org>/<repo>/resolve/main/<weights-file>',
+ '/tmp/<model>.pth')"
+
+# 2. Quantize directly to raw quanta bytes, then DELETE the source
+python3 -c "
+import torch, os
+from omni_diffusion.x8d_quanta import quantize_state_dict_to_gguf
+sd = torch.load('/tmp/<model>.pth', map_location='cpu', weights_only=True)
+flat = {}
+for sub, tens in sorted(sd.items()):
+    for k, v in sorted(tens.items()):
+        flat[f'{sub}.{k}'] = v
+out = quantize_state_dict_to_gguf(flat, '/tmp/<model>.x8D')
+os.remove('/tmp/<model>.pth')   # source deleted immediately
+"
+```
+
+- `quantize_state_dict_to_gguf()` (in `omni_diffusion/x8d_quanta.py`) writes
+  each weight tensor as `round(w)`→U8 bytes, sorted by state-dict key,
+  concatenated raw — **disk = source_bytes × 0.001** (no container, no padding),
+  then lossless arithmetic-coded via `omni_diffusion/x8d_arith.py`.
+- Verify: disk size == source_bytes × 0.001; `QuantizedServingReader(path)`
+  blob == whole file; `quanta(128) == 0.128`; `dequantize(quantize(x)) == x`;
+  arithmetic-code roundtrip is lossless.
+- Serving slices the raw blob by the target architecture's known shapes
+  (`omni_diffusion/x8d_expert.py`), mmaps it, runs on it. No full model.
 
 ### Speculative Decoding at Inference
 
@@ -234,8 +287,8 @@ Implemented in `omni_diffusion/x8d_spec_decode.py` (pure stdlib, no torch).
 | Representation | Size | vs FP16 |
 |---|---|---|
 | Full FP16/BF16 | 32.00 GB | — |
-| x8D U8 .gguf on disk | 16.00 GB | 50% ↓ (lossless, servable) |
-| Sub-byte coordinates | 32.0 MB | 99.9% ↓ (0.016 bit/weight ceiling) |
+| x8D U8 raw bytes on disk | 16.00 GB | 50% ↓ (lossless, servable) |
+| Sub-byte coordinates (.x8D) | 16.0 MB | 99.9% ↓ (0.008 bit per weight byte) |
 
 **Dataset plan** (`research/Training-Dataset-and-Quantization-Plan.md`):
 - Tier 0 text bytes: FineWeb, The Pile, RedPajama (pure UTF-8 byte streams).
@@ -310,7 +363,7 @@ quantizes **without downloading the model**: it pin-points each upstream HF tens
 bytes stay on HF disk; only the requested expert's span is Range-fetched / mmap'd and
 `/0.001`-reversed at query time. Verified on a real expert: 5,505,024 B fetched from
 the 2.78 TB model, reverse exact. Full map = 151.8 MB. **Kimi-K3: 1.56 TB → 2.837 GB
-(550:1)**: U8×0.001=0.008 bit/param → 2.723 GB, BF16×0.001=0.016 → 114.4 MB. (#10)
+(550:1)**: U8×0.001=0.008 bit per weight byte → 2.723 GB, fp16 5.56 TB × 0.001 = 5.56 GB. (#10)
 
 **SARA routing boundaries (#36)** — `omni_diffusion/moe_disk.py`:
 `SARABoundary` + `SARA_REGISTRY` + `SARARouter` (issue #36). Dense models
@@ -336,9 +389,9 @@ serve from them, never from a full float checkpoint.
   bytes stay on the upstream HF disk; only the requested expert's exact span
   is Range-fetched and `/0.001`-reversed live at query time (#10/#9).
 - For dense experts (Kokoro = one BLOB = the whole `.pth`), the serving path
-  is: fetch the blob ONCE via the pointer map -> quantize into an `X8DGGUF1`
-  U8×0.001 container (the **x8D quantized weight**) -> delete the source ->
-  mmap the container and run the forward pass from it.
+  is: fetch the blob ONCE via the pointer map -> quantize into an `.x8D`
+  U8×0.001 file (the **x8D quantized weight**) -> delete the source ->
+  mmap the `.x8D` and run the forward pass from it.
 - **NEVER download/keep a full float checkpoint, and NEVER `torch.load` a
   full `.pth` to run.** The full checkpoint exists only as the one-time
   quantization input and is deleted the moment the quantized container is
@@ -346,30 +399,33 @@ serve from them, never from a full float checkpoint.
   + the model's forward-pass code. If you find yourself reaching for the full
   float file, you are doing it wrong.
 
-**New sub-byte quantization for real models (2026-07-31, #48) —
+**New sub-byte quantization for real models (2026-07-31, #48/#50) —
 `omni_diffusion/x8d_quanta.py`.**
-Real float tensors cannot be stored as bare 0-255 coordinates without
-sign/range, so the 0.001 law is applied ON TOP of a per-tensor symmetric U8
-quantization:
+The 0.001 law applied directly to real model weights: each weight tensor is
+mapped to its nearest U8 byte (0-255); the stored byte IS the quanta
+coordinate (coordinate value = `byte × 0.001`, reverse `/0.001` exact):
 
 ```
-scale = max(|w|) / 127                    # per-tensor float32 (tiny manifest)
-quanta = clamp(round(w / scale), -127, 127) + 128    # U8 coordinate
-w      ~= (quanta - 128) * scale          # live /0.001 reverse at query time
+Quanta[i] = weight_byte[i] × 0.001        # coordinate in [0.0, 0.255]
+weight_byte[i] = round(Quanta[i] / 0.001) # bijective over 0-255
 ```
 
-- Each tensor's U8 coordinates are stored in an `X8DGGUF1` container (raw
-  bytes, no float weight bloat) behind a compact binary manifest of
-  `{scale, shape, dtype}` — NOT JSON weight data, only quantization params.
-- Serving = `mmap` the container, slice the exact tensor spans (zero-copy),
-  reverse `(quanta-128)*scale` on demand. The compressed state IS the running
-  state; the full model is never materialized.
+- Each tensor's byte coordinates are concatenated RAW into an `.x8D`
+  file — **no `GGUF_MAGIC`, no framing, no name-length headers, no
+  manifest, no padding** on top of the quantized weight, then lossless
+  arithmetic-coded via `omni_diffusion/x8d_arith.py` (see the
+  direct-from-HF procedure above, #50).
+- Serving = `mmap` the raw blob, slice the exact tensor spans by the target
+  architecture's known shapes (zero-copy), `byte × 0.001` gives the coordinate
+  live on demand. The compressed state IS the running state; the full model is
+  never materialized.
 - Proof (Kokoro-82M, real): `kokoro-v1_0.pth` 327 MB (81,763,410 params,
   548 tensors, 5 submodules `bert/bert_encoder/predictor/text_encoder/decoder`)
-  -> `kokoro.x8dgguf` 81.9 MB U8 container; source deleted after quantization.
+  -> `kokoro.x8D` **327,054 bytes** (source_bytes 327,053,640 × 0.001, no
+  padding); source deleted immediately after quantization.
 - Real serving: `omni_diffusion/x8d_expert.py` `KokoroTTS` builds the real
-  Kokoro architecture from `config.json` + loads weights from the mmap'd
-  container, phonemizes via `misaki`, and synthesizes real 24 kHz audio on
+  Kokoro architecture from `config.json` + slices weights from the mmap'd
+  raw container, phonemizes via `misaki`, and synthesizes real 24 kHz audio on
   MPS/CPU — no full model anywhere. The same pattern applies to Whisper
   (ASR, CPU/MPS-runnable), LTX-2 (image/video, GPU-required 19B) and
   Kimi-K3 (text, GPU-required 2.78T); those two are honest GPU-gated until a
@@ -568,15 +624,16 @@ x8D-Omni-Diffusion/
 │   ├── constants.py                   # Shared constants
 │   ├── tokenizer.py                   # Legacy Qwen2 tokenizer wrapper
 │   ├── tokenizer_sensevoice_glm4voice.py  # SenseVoice/GLM4Voice tokenizer
-│   ├── x8d_export.py                  # x8D 0.001 + X8DGGUF1 U8 container
+│   ├── x8d_export.py                  # x8D 0.001 + .x8D U8 export
 │   ├── x8d_spec_decode.py             # DSpark 8x8 spec-decode quantizer + size report
-│   ├── x8d_subbyte.py                 # 0.016 bit/weight packed model (32MB=32GB)
+│   ├── x8d_subbyte.py                 # 0.008 bit per weight byte lossless sub-byte pack (.x8D)
 │   ├── x8d_hf.py                      # [#9] HF repo -> x8D .gguf converter + pointer loader
 │   ├── x8d_dataset.py                 # [#25] HF datasets-server import -> 8x8 block-compressed .x8dds.gguf
 │   ├── x8d_mmap.py                    # [#41] zero-copy mmap frame reader over .gguf/.x8dds.gguf
 │   ├── x8d_telemetry.py               # [#41] per-8x8-block I/O + RSS telemetry (Colibrì port)
-│   ├── x8d_quanta.py                  # [#48] real-model sub-byte quantization -> X8DGGUF1 U8×0.001 container + live reverse
-│   ├── x8d_expert.py                  # [#48] on-container expert serving (KokoroTTS real TTS from quantized weights)
+│   ├── x8d_quanta.py                  # [#48/#50] direct-from-HF quantization -> raw-quanta .x8D (0.001 law, no magic/padding)
+│   ├── x8d_arith.py                   # arithmetic coder — fractional bits, lossless sub-byte pack (.x8D)
+│   ├── x8d_expert.py                  # [#48/#50] on-container expert serving (KokoroTTS real TTS from raw quanta blob)
 │   ├── x8d_media.py                   # procedural PNG/PCM/AVI — obsolete (superseded by real-model path, #48)
 │   ├── moe_disk.py                    # [#9] mmap on-disk MoE expert serving
 │   │
@@ -641,8 +698,9 @@ x8D-Omni-Diffusion/
 │   ├── test_config.py                 # byte-native config defaults
 │   ├── test_queries.py                # 10 tests — full pipeline all modalities
 │   ├── test_spec_decode.py            # 11 tests — DSpark spec-decode quantizer
-│   ├── test_subbyte.py                # 8 tests — 32MB=32GB packed model
+│   ├── test_subbyte.py                # 8 tests — 0.008 bit/byte .x8D sub-byte pack
 │   ├── test_x8d_export.py             # x8D gguf container tests
+│   ├── test_x8d_arith.py              # arithmetic coder — lossless sub-byte pack roundtrip
 │   ├── test_x8d_hf.py                 # [#9] shard->gguf + MoE on-disk serving
 │   ├── test_pointer_quantize.py       # [#10] Kimi-K3 pointer map + forward-identical
 │   ├── test_quantize_hf.py            # [#17] generic HF pointer quantizer

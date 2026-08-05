@@ -2,6 +2,7 @@
 """Tests for the x8Dsub-byte 0.001 compression + x8D .gguf container export."""
 
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -9,9 +10,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from omni_diffusion.x8d_export import (  # noqa: E402
-    GGUF_MAGIC,
     LAW,
-    X8DHeaderError,
     dequantize,
     load_gguf,
     mmap_load_gguf,
@@ -21,6 +20,7 @@ from omni_diffusion.x8d_export import (  # noqa: E402
     to_u8,
     verify_framework_alignment,
 )
+from omni_diffusion.x8d_mmap import build_payload_index  # noqa: E402
 
 
 class QuantaTest(unittest.TestCase):
@@ -91,16 +91,24 @@ class GGUFContainerTest(unittest.TestCase):
         save_gguf({"w": b"\x00\xff"}, path)
         with open(path, "rb") as f:
             blob = f.read()
-        self.assertTrue(blob.startswith(GGUF_MAGIC))
+        # magic-free container: no X8DGGUF1 anywhere, no JSON anywhere
+        self.assertNotIn(b"X8DGGUF1", blob)
+        # the first record starts at file offset 0: <u32 name_len><name>...
+        (name_len,) = struct.unpack("<I", blob[:4])
+        self.assertEqual(name_len, 1)
+        self.assertEqual(blob[4 : 4 + name_len], b"w")
         self.assertNotIn(b"{", blob)
         self.assertNotIn(b'"', blob)
 
-    def test_bad_magic_raises(self):
+    def test_empty_file_returns_empty(self):
+        # There is no magic/header to validate anymore: an empty container is
+        # simply an empty payload map.
         path = self._tmpfile()
-        with open(path, "wb") as f:
-            f.write(b"NOTX8D...")
-        with self.assertRaises(X8DHeaderError):
-            load_gguf(path)
+        with open(path, "wb"):
+            pass
+        payloads, meta = load_gguf(path)
+        self.assertEqual(payloads, {})
+        self.assertEqual(meta["law"], LAW)
 
     def test_mmap_zero_copy_load(self):
         path = self._tmpfile()
@@ -108,8 +116,11 @@ class GGUFContainerTest(unittest.TestCase):
         save_gguf({"big": payload}, path)
         mapping, meta = mmap_load_gguf(path)
         try:
-            self.assertEqual(mapping[: len(GGUF_MAGIC)], GGUF_MAGIC)
             self.assertEqual(meta["size_bytes"], os.path.getsize(path))
+            # header-free: the body starts at offset 0, so the "big" payload
+            # sits at 4 (name_len) + 3 ("big") + 8 (data_len).
+            index = build_payload_index(bytes(mapping), base=0)
+            self.assertEqual(index["big"], (4 + len(b"big") + 8, len(payload)))
         finally:
             mapping.close()
 

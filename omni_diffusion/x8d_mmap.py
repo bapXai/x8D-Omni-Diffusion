@@ -1,5 +1,5 @@
 # coding=utf-8
-"""Zero-copy mmap frame addressing over x8D `.gguf` / `.x8dds.gguf` containers.
+"""Zero-copy mmap frame addressing over x8D `.x8D` / `.x8dds.gguf` containers.
 
 Pure Python standard library only. This is the **Colibrì `COLI_MMAP=1` path
 re-expressed for the sub-byte container** (issue #41): Colibrì mmaps raw
@@ -8,6 +8,9 @@ mmap the x8D container (whose U8 coordinates already live at 0.001 scaling) so
 the **compressed state IS the running state** — payloads are addressed by an
 offset index and sliced straight out of the mapping with zero copying, and the
 ``/0.001`` inverse operates as a live coordinate pointer map at query time.
+
+The container is magic-free: no GGUF_MAGIC, no framing, no manifest, no
+padding. The body is ``<u32 name_len><name><u64 data_len><data>`` records.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import os
 import struct
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
-from .x8d_export import GGUF_MAGIC, LAW, X8DHeaderError
+from .x8d_export import LAW
 
 #: x8D dataset-stream magic ("X8DDS" + version 0x00 0x01), mirrored from
 #: ``x8d_dataset.py`` so the frame walker can validate stream payloads.
@@ -27,8 +30,8 @@ X8DDS_MAGIC: bytes = b"X8DDS\x00\x01"
 #: ``x8d_spec_decode.py``).
 BLOCK_SIZE: int = 64
 
-#: ``_HEADER_FMT`` from x8d_export: magic(8) + reserved Q.
-_HEADER_SIZE: int = 8 + 8
+#: No header: the container body begins at file offset 0.
+_HEADER_SIZE: int = 0
 
 
 class X8DMmapError(ValueError):
@@ -107,14 +110,10 @@ class MappedX8DReader:
         except BaseException:
             os.close(self._fd)
             raise
-        if self._mapping[: len(GGUF_MAGIC)] != GGUF_MAGIC:
-            self.close()
-            raise X8DHeaderError(
-                f"Not a valid x8D GGUF container (magic "
-                f"{self._mapping[: len(GGUF_MAGIC)]!r})"
-            )
+        if self._mapping is None:
+            raise X8DMmapError("mmap failed")
         self.index: Dict[str, Tuple[int, int]] = build_payload_index(
-            bytes(self._mapping[_HEADER_SIZE:]), base=_HEADER_SIZE
+            bytes(self._mapping), base=0
         )
         self.law: float = LAW
 

@@ -7,8 +7,9 @@ container using the 0.001 sub-byte law.
 
 Design notes
 ------------
-- The x8D container stores raw U8 byte coordinates (X8DGGUF1 magic) behind
-  per-tensor name records: ``<u32 name_len><name><u64 data_len><bytes>``.
+- The x8D container is magic-free: raw U8 byte coordinates behind per-tensor
+  name records ``<u32 name_len><name><u64 data_len><bytes>`` starting at file
+  offset 0.
 - Conversion is per-tensor and streaming-friendly: a caller can ask for ONE
   tensor (e.g. a specific MoE expert) and only those bytes are read from disk
   (mmap) or fetched over HTTP Range — the full model is never loaded into RAM.
@@ -28,7 +29,7 @@ import os
 import struct
 from typing import Dict, List, Optional, Tuple
 
-from .x8d_export import GGUF_MAGIC, LAW, X8D_HEADER, save_gguf
+from .x8d_export import LAW, save_gguf
 
 #: safetensors header: <u64: header_len><json header><data...>
 _ST_HEADER = struct.Struct("<Q")

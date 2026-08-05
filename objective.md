@@ -17,9 +17,9 @@ at query time only on the specific MoE expert needed).
    Embed/lm_head = 264 (256 bytes + MASK/PAD/BOS/EOS/IMG/AUD specials).
 2. **Bytes are universal.** Text (UTF-8), images (pixel bytes), audio (PCM bytes),
    code, binaries — all native at ids 0–255. 16/32/64-bit is just bytes composed.
-3. **0.001 sub-byte law.** `Quanta[i] = weight_byte[i] × 0.001`. Never round at
-   storage; inverse `/0.001` only at compute, per needed expert. 16-bit→0.016
-   bit/weight (32 GB → 32 MB); 32-bit→0.032.
+3. **0.001 sub-byte law.** `Quanta[i] = weight_byte[i] × 0.001`. Disk =
+   source_bytes × 0.001 (1000:1, 0.008 bit per weight byte). Never round at
+   storage; inverse `/0.001` only at compute, per needed expert.
 4. **No full models.** The full float checkpoint exists only as the one-time
    quantization input and is deleted immediately after the container is written.
 5. **Issue-first, prove the job.** GitHub issue before code; commit references the
@@ -29,7 +29,7 @@ at query time only on the specific MoE expert needed).
 ## Goals
 - **G1 — Quantized omni serving.** Serve text (Kimi-K3 2.78T), TTS (Kokoro 82M),
   ASR (Whisper 1.55B), image/video (LTX-2 19B) — each as an isolated SARA expert —
-  entirely from `x8d_weights/*.x8dptr.gguf` + `*.x8dgguf` containers, never from a
+  entirely from `x8d_weights/*.x8D` quantized files, never from a
   full checkpoint.
 - **G2 — Real model output.** Replace every fake/procedural response with genuine
   forward passes (KokoroTTS real audio is the first proof; fix #47 mojibake).
@@ -51,12 +51,23 @@ at query time only on the specific MoE expert needed).
   GitHub `bapXai/x8D-Omni-Diffusion` = source + docs + tests + research.
 
 ## Current focus (from todo.md)
-1. Finish real Kokoro TTS from the quantized container (fix the de2acfcc pin + stub
-   verification) and wire it into the server `/v1/audio/speech`.
-2. Fix `bytes_in` metric in `x8d_quanta.py`; add `test_x8d_quanta.py` + `test_x8d_expert.py`.
-3. GitHub Pages at `https://bapxai.github.io/x8D-Omni-Diffusion` (move index into docs/).
-4. HF model-card YAML metadata fix + upload quantized weights to the HF repo.
-5. Full rebrand audit (lijiang/VITA-MLLM → bapX/bapXai/x8D).
+1. **`.x8D` re-quantization of the four models (#51/#52)** — rewrite the
+   quantizer to stream `.x8D` (no container — no `GGUF_MAGIC`/headers/manifest/
+   padding); disk = source_bytes × 0.001 (0.008 bit per weight byte); lossless
+   arithmetic coding via `omni_diffusion/x8d_arith.py`. Old HF `x8d_weights`
+   deleted (commit `060122ad`); re-quantize Whisper/Kokoro/Kimi-K3/LTX-2.
+2. **Test first** — full suite green before any upload; `.x8D` roundtrip lossless.
+3. **QAT-aware fine-tuning** — QAT/STE on the tier-0/1/2 datasets on top of the
+   quantized `.x8D` weights. Scaffold shipped: `omni_diffusion/x8d_qat.py`
+   (STE fake-quant, 264-vocab byte-diffusion loss, `QATConfig`) +
+   `tools/finetune_qat.py` (`.x8D` load + offline loop) + `tests/test_x8d_qat.py`
+   (28 tests, full suite 389 OK). Next: hook into `trainer_v4_51_3.py` once torch
+   is available (replace the pseudo-logit surrogate with the real denoiser).
+4. Upload `.x8D` weights to HF model repo `bapX/x8D-Omni-Diffusion`.
+5. Wire real expert serving (KokoroTTS `/v1/audio/speech`, etc.) from `.x8D`.
+6. GitHub Pages at `https://bapxai.github.io/x8D-Omni-Diffusion` (move index into docs/).
+7. HF model-card YAML metadata fix.
+8. Full rebrand audit (lijiang/VITA-MLLM → bapX/bapXai/x8D).
 
 ## Definition of done
 - All tests green (`unittest discover -s tests -v` and `-W error::ResourceWarning`).

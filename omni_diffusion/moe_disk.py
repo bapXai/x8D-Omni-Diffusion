@@ -1,5 +1,5 @@
 # coding=utf-8
-"""On-disk MoE expert serving from an x8D .gguf container (issue #9).
+"""On-disk MoE expert serving from an x8D .x8D container (issue #9).
 
 The serving law: **compressed state IS the running state.** Weights are NEVER
 loaded into RAM. An x8D container is memory-mapped, and at query time only the
@@ -8,9 +8,9 @@ specific MoE expert needed for the current token is materialized:
     weight_byte = round(quanta / 0.001)      # live /0.001 reverse
     expert_mat = reshape(weight_byte, (in, out))
 
-Pure Python stdlib. The container layout is the x8D GGUF format from
-``x8d_export.py``: ``<u64 name_len><name><u64 data_len><raw U8 bytes>`` per
-tensor, behind the X8DGGUF1 magic.
+Pure Python stdlib. The container layout is the x8D format from
+``x8d_export.py``: ``<u32 name_len><name><u64 data_len><raw U8 bytes>`` per
+tensor, with NO magic, NO header, NO manifest.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import struct
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from .x8d_export import GGUF_MAGIC, LAW, _HEADER_SIZE
+from .x8d_export import LAW
 
 #: MoE expert key convention: ``<layer>.<expert_idx>.w{1,2,3}``
 _EXP_KEY_FMT = "layers.{layer}.experts.{expert}.w{proj}"
@@ -136,9 +136,9 @@ class X8DGgufReader:
             self._mmap = mmap.mmap(fd, size, access=mmap.ACCESS_READ)
         finally:
             os.close(fd)
-        if self._mmap[: len(GGUF_MAGIC)] != GGUF_MAGIC:
-            raise ValueError(f"Not a valid x8D GGUF container: {path}")
-        self._cursor = _HEADER_SIZE
+        if self._mmap is None:
+            raise ValueError(f"mmap failed: {path}")
+        self._cursor = 0
         self._tensors: Dict[str, Tuple[int, int]] = {}  # name -> (off, len)
         self._scan()
 

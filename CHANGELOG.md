@@ -5,6 +5,49 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Added — QAT fine-tuning scaffold (2026-08-05)
+- **`omni_diffusion/x8d_qat.py`** — x8Dsub-byte QAT (Quantization-Aware Training)
+  core, pure stdlib with lazy torch:
+  - `quantize_ste` — fake-quant `round(clamp(w, 0, 255))` with the straight-
+    through estimator (forward = U8 byte coordinate, backward = identity, per
+    AGENTS.md "Definitions" QAT recipe); torch-lazy `x.round().clamp() +
+    (x - x.detach())` variant.
+  - `hard_quantize` (ste=False detached), `ste_grad` (identity backward),
+    `QATWrapper`/`wrap_for_qat` (dict or `named_parameters()` shim),
+    `x8d_qat_roundtrip_loss` (mean abs diff), `byte_diffusion_loss`
+    (pure-Python stable CE over the 264-vocab byte space),
+    `mask_canvas`/`renoise_to_random_bytes` (delegates to
+    `byte_diffusion.ByteDiffusionSampler` — reused, not duplicated), and a
+    `QATConfig` dataclass defaulting to the AGENTS.md byte-diffusion settings
+    (`diffusion_steps=48`, `entropy_bound=0.1`, `canvas_length=256`).
+- **`tools/finetune_qat.py`** — QAT fine-tuning scaffold: loads a quantized
+  `.x8D` container via `QuantizedServingReader` (mmap + tensor_names/
+  tensor_bytes), builds float weights from the U8 quanta, and runs
+  `fine_tune_qat` (split canvas -> mask -> renoise -> `byte_diffusion_loss` ->
+  fake step recording the loss curve; returns byte-aligned final weights).
+  Runnable end-to-end offline with synthetic bytes; CLI supports `--x8d`,
+  `--bytes`, `--epochs`, `--batch-size`, `--canvas-length`, `--seed`.
+- **`tests/test_x8d_qat.py`** — 28 tests (STE forward/gradient, roundtrip loss,
+  diffusion-loss calibration, wrapper, config defaults, end-to-end fine-tune +
+  `.x8D` load); 1 torch-gated test skipped (torch not installed). Full suite:
+  **389 tests OK (8 skipped)**, clean under `-W error::ResourceWarning`.
+
+### Changed — #51, #52
+- **`.x8D` re-quantization law correction** — disk = source_bytes × 0.001
+  (1000:1, 0.008 bit per weight byte); quantized model files are named `.x8D`
+  with NO container — no `GGUF_MAGIC`, no headers, no manifest, no padding.
+  Stale claims corrected in AGENTS.md: Kokoro "81,763,410-byte raw container"
+  → 327,054 B `.x8D` (fp32 327,053,640 B × 0.001); size-report sub-byte row
+  "32.0 MB / 0.016 bit/weight" → "16.0 MB / 0.008 bit per weight byte";
+  Kimi-K3 invented "BF16×0.001=0.016 → 114.4 MB" → "fp16 5.56 TB × 0.001 =
+  5.56 GB". Old HF `x8d_weights` deleted (commit `060122ad`); re-quantization
+  to `.x8D` in progress (Whisper/Kokoro/Kimi-K3/LTX-2), test-first, then
+  upload to HF + QAT-aware fine-tuning on tier-0/1/2 datasets.
+- **`omni_diffusion/x8d_arith.py`** — pure-stdlib arithmetic coder (fractional
+  bits, lossless sub-byte pack) for the `.x8D` coordinate stream.
+- GitHub issues **#51** (1 byte/param) and **#52** (magic/headers) are open for
+  these violations; this work is tracked against them.
+
 ### Fixed — #47
 - **DSpark generation in the server pipeline** — `byte_pipeline`,
   `byte_pipeline_ids` and `_generate_bytes` previously masked the ENTIRE

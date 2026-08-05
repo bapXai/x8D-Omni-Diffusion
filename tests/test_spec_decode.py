@@ -9,7 +9,6 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from omni_diffusion.x8d_export import (  # noqa: E402
-    GGUF_MAGIC,
     LAW,
     load_gguf,
     save_gguf,

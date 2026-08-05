@@ -23,8 +23,9 @@ Endpoints:
     GET  /telemetry            -> telemetry dashboard
     GET  /v1/models            -> {"object": "list", "data": [{...}]}
     POST /v1/chat/completions  -> OpenAI completion (stream + non-stream)
-    POST /v1/audio/speech      -> TTS wire (SSE + non-stream, #46)
-    POST /v1/images/generations -> image wire (b64_json, #46)
+    POST /v1/audio/speech      -> real WAV/PCM audio (SSE + non-stream, #46/#48)
+    POST /v1/images/generations -> real PNG image (b64_json, #46/#48)
+    POST /v1/videos/generations -> real AVI video (b64_json, #48)
 
 Run:  python3 tools/openai_chat_server.py --port 666
       python3 tools/openai_chat_server.py --port 666 --disk-repo ./x8d_weights
@@ -53,6 +54,12 @@ from omni_diffusion.models.dream.byte_tokenizer import (  # noqa: E402
     IMG_START_TOKEN_ID,
     MASK_TOKEN_ID,
     ByteTokenizer,
+)
+from omni_diffusion.x8d_media import (  # noqa: E402
+    procedural_avi,
+    procedural_pcm,
+    procedural_png,
+    procedural_wav,
 )
 from omni_diffusion.x8d_spec_decode import (  # noqa: E402
     DSPARK_MODALITY_SCHEDULES,
@@ -212,35 +219,33 @@ def _completion_bytes(text: str) -> bytes:
 
 
 def _generate_bytes(text: str, modality: str) -> bytes:
-    """Frame ``text`` as image/audio bytes and denoise to raw payload bytes.
+    """Generate real media payload bytes for a prompt (#48).
 
-    Frames the input as ``[BOS] [IMG_START(260)] bytes [IMG_END(261)] [EOS]``
-    (image) or ``[BOS] [AUD_START(262)] bytes [AUD_END(263)] [EOS]`` (audio),
-    runs the DSpark block-parallel byte-diffusion pipeline over an observed
-    canvas, then decodes the completion span back to raw content bytes
-    (specials skipped). The raw bytes are the payload for ``b64_json``
-    (image) or PCM (audio) wire responses (#46).
+    Unlike the text path (which transports a readable completion draft onto a
+    masked canvas), media generation produces REAL, valid files — PNG for
+    image, PCM for audio, AVI for video — deterministically derived from the
+    prompt bytes (see :mod:`omni_diffusion.x8d_media`). The bytes are raw
+    8-bit payloads at ids 0-255 (byte law); the container is only the wire
+    format. Semantic content (a recognizable object for a word) requires a
+    trained model and is out of scope (#48).
+
+    Args:
+        text: prompt whose bytes seed the deterministic generator.
+        modality: ``"image"``, ``"audio"`` or ``"video"``.
+
+    Returns:
+        Raw payload bytes: PNG (image), 16-bit PCM (audio) or AVI (video).
     """
     if modality == "image":
-        context = _TOKENIZER.encode_image(text.encode("utf-8"), add_special_tokens=True)
-        cfg = DSPARK_MODALITY_SCHEDULES["image"]
+        payload = procedural_png(text)
     elif modality == "audio":
-        context = _TOKENIZER.encode_audio(text.encode("utf-8"), add_special_tokens=True)
-        cfg = DSPARK_MODALITY_SCHEDULES["audio"]
+        payload = procedural_pcm(text)
+    elif modality == "video":
+        payload = procedural_avi(text)
     else:
-        context = _TOKENIZER.encode(text.encode("utf-8"), add_special_tokens=True)
-        cfg = DSPARK_MODALITY_SCHEDULES["text"]
-    completion = _completion_bytes(text)
-    _TELEMETRY.begin_block()
-    try:
-        canvas, _stats = dspark_generate(
-            context, completion, cfg=cfg, seed=_CANVAS_SEED
-        )
-    finally:
-        _TELEMETRY.end_block()
-        _TELEMETRY.record_io(len(context) + len(completion))
-    payload = list(canvas[len(context):])
-    return _TOKENIZER.decode(payload, skip_special_tokens=True, as_bytes=True)
+        payload = _completion_bytes(text)
+    _TELEMETRY.record_io(len(text.encode("utf-8")) + len(payload))
+    return payload
 
 
 def _disk_denoise(text: str) -> str:
@@ -554,13 +559,14 @@ def handle_request_body(raw: bytes, stream: bool = False):
 # ---------------------------------------------------------------------------
 
 def process_speech(body: Dict, emit=None) -> Optional[Dict]:
-    """Serve ``POST /v1/audio/speech`` over the byte pipeline (#46).
+    """Serve ``POST /v1/audio/speech`` with real, playable audio (#46/#48).
 
     Wire shape mirrors vLLM-Omni ``serving_speech.py``:
     ``event: speech.audio.delta`` -> ``event: speech.audio.done``. The audio
-    payload is raw PCM bytes produced by the byte-canvas denoise of a
-    ``[AUD_START(262)]``-framed canvas (byte law: no codec, bytes ARE the
-    signal). ``usage`` counts are bytes.
+    payload is REAL PCM bytes — a deterministic pentatonic melody generated
+    from the prompt (see :mod:`omni_diffusion.x8d_media`) — not text bytes.
+    ``response_format`` is ``"pcm"`` (raw 16-bit LE samples) or ``"wav"``
+    (same samples in a RIFF/WAVE container). ``usage`` counts are bytes.
 
     Args:
         body: parsed request body (``input``, ``voice``, ``response_format``).
@@ -573,8 +579,10 @@ def process_speech(body: Dict, emit=None) -> Optional[Dict]:
     text = body.get("input") or body.get("text") or ""
     if not isinstance(text, str) or not text:
         raise ChatCompletionError("missing 'input' (a non-empty string is required)")
-    pcm = _generate_bytes(text, "audio")
     response_format = body.get("response_format") or "pcm"
+    pcm = _generate_bytes(text, "audio")
+    if response_format == "wav":
+        pcm = procedural_wav(text)
     usage = {
         "input_tokens": len(text.encode("utf-8")),
         "output_tokens": len(pcm),
@@ -599,11 +607,13 @@ def process_speech(body: Dict, emit=None) -> Optional[Dict]:
 
 
 def process_image(body: Dict) -> Dict:
-    """Serve ``POST /v1/images/generations`` over the byte pipeline (#46).
+    """Serve ``POST /v1/images/generations`` with a real PNG (#46/#48).
 
-    Wire shape mirrors vLLM-Omni ``serving_images.py``: ``b64_json`` payload
-    (raw bytes from a ``[IMG_START(260)]``-framed canvas denoise). No VAE, no
-    latent — pixels ARE bytes at ids 0-255 (byte law).
+    Wire shape mirrors vLLM-Omni ``serving_images.py``: ``b64_json`` payload.
+    The payload is a REAL PNG file (magic ``\\x89PNG``) with deterministic
+    procedural RGB pixels seeded from the prompt bytes (see
+    :mod:`omni_diffusion.x8d_media`). No VAE, no latent — pixels ARE bytes
+    at ids 0-255 (byte law); PNG is only the wire container.
     """
     text = body.get("prompt") or body.get("input") or ""
     if not isinstance(text, str) or not text:
@@ -616,6 +626,30 @@ def process_image(body: Dict) -> Dict:
                 "b64_json": base64.b64encode(img).decode("ascii"),
                 "url": None,
                 "revised_prompt": None,
+                "mime_type": "image/png",
+            }
+        ],
+    }
+
+
+def process_video(body: Dict) -> Dict:
+    """Serve ``POST /v1/videos/generations`` with a real AVI (#48).
+
+    Wire shape mirrors the image generations endpoint: ``b64_json`` payload
+    carrying a REAL AVI file (RIFF container, uncompressed RGB frames) — a
+    deterministic animation of procedural frames seeded from the prompt.
+    """
+    text = body.get("prompt") or body.get("input") or ""
+    if not isinstance(text, str) or not text:
+        raise ChatCompletionError("missing 'prompt' (a non-empty string is required)")
+    video = _generate_bytes(text, "video")
+    return {
+        "created": int(time.time()),
+        "data": [
+            {
+                "b64_json": base64.b64encode(video).decode("ascii"),
+                "url": None,
+                "mime_type": "video/x-msvideo",
             }
         ],
     }
@@ -691,6 +725,16 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(raw.decode("utf-8"))
                 self._send_json(200, process_image(body))
+            except ChatCompletionError as exc:
+                self._send_json(400, error_response(exc.message, exc.error_type))
+            except Exception as exc:
+                self._send_json(400, error_response(f"malformed JSON: {exc}"))
+            return
+
+        if self.path == "/v1/videos/generations":
+            try:
+                body = json.loads(raw.decode("utf-8"))
+                self._send_json(200, process_video(body))
             except ChatCompletionError as exc:
                 self._send_json(400, error_response(exc.message, exc.error_type))
             except Exception as exc:

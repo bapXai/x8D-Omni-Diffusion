@@ -47,7 +47,7 @@ from omni_diffusion.x8d_dataset import (  # noqa: E402
     resolve_hf_dataset,
     rows_to_byte_stream,
 )
-from omni_diffusion.x8d_export import save_gguf, X8D_HEADER  # noqa: E402
+from omni_diffusion.x8d_export import save_gguf  # noqa: E402
 from omni_diffusion.x8d_mmap import MappedX8DReader  # noqa: E402
 
 #: Fields concatenated for the JSONL pipeline (byte-native text/code arrays).

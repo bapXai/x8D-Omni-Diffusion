@@ -1,9 +1,12 @@
 # coding=utf-8
-"""x8Dsub-byte 0.001 sub-byte weight compression + x8D .gguf container export.
+"""x8Dsub-byte 0.001 sub-byte weight compression + raw x8D container export.
 
 Pure Python standard library only. Mirrors the `bapXai/x8Dsub-byte` repo
 (`x8Dquanta/__init__.py`): ``Quanta[i] = weight_byte[i] * 0.001`` stored as
-U8 coordinates in a header-less container with the ``X8DGGUF1`` magic.
+U8 coordinates in a container with NO magic bytes, NO JSON, NO manifest.
+The per-payload records carry only a name-length address (needed to route
+individual tensors/experts); there is no header of any kind on top of the
+quantized weight bytes.
 
 Zero-copy mmap serving: the compressed state IS the running state. The
 inverse math (``/ 0.001``) operates as a live coordinate pointer map at
@@ -20,21 +23,8 @@ from typing import BinaryIO, Dict, Iterable, List, Mapping, Optional, Tuple
 #: The x8D sub-byte scaling law.
 LAW: float = 0.001
 
-#: Container magic for x8D GGUF files.
-GGUF_MAGIC: bytes = b"X8DGGUF1"
-
-#: Version + quantization tag (single byte). U8 = raw byte coordinates.
-_HEADER_FMT = "<8sQ"
-_HEADER_SIZE = struct.calcsize(_HEADER_FMT)
-
-X8D_HEADER = struct.pack(_HEADER_FMT, GGUF_MAGIC, 0)
-
 #: Precomputed sub-byte coordinate for every byte (0.001 law), for quantize().
 _QUANTA_LUT: Tuple[float, ...] = tuple(float(b) * LAW for b in range(256))
-
-
-class X8DHeaderError(ValueError):
-    """Raised when a file does not carry a valid x8D header."""
 
 
 def quantize(weight_bytes: Iterable[int]) -> List[float]:
@@ -111,10 +101,12 @@ def _coerce_payload(data: Iterable) -> bytes:
 
 
 def save_gguf(file_payloads: Mapping[str, bytes], filename: str) -> str:
-    """Write payloads into a pure x8D GGUF container.
+    """Write payloads into a raw x8D container.
 
-    No JSON, no float bloat, no character metadata -- only raw U8 byte
-    coordinates behind the ``X8DGGUF1`` magic.
+    No magic, no JSON, no float bloat, no character metadata -- only raw U8
+    byte coordinates behind a minimal name-length address record per payload.
+    The quantized weight bytes themselves carry no header, no framing, no
+    padding.
 
     Args:
         file_payloads: mapping of name -> raw bytes (already quantized or
@@ -127,13 +119,7 @@ def save_gguf(file_payloads: Mapping[str, bytes], filename: str) -> str:
     if not isinstance(file_payloads, dict):
         raise TypeError("file_payloads must be a dict[str, bytes]")
 
-    if not file_payloads:
-        with open(filename, "wb") as f:
-            f.write(X8D_HEADER)
-        return filename
-
     with open(filename, "wb") as f:
-        f.write(X8D_HEADER)
         for name, data in file_payloads.items():
             if not isinstance(data, (bytes, bytearray)):
                 data = _coerce_payload(data)
@@ -146,21 +132,15 @@ def save_gguf(file_payloads: Mapping[str, bytes], filename: str) -> str:
 
 
 def load_gguf(filename: str) -> Tuple[Dict[str, bytes], Dict[str, object]]:
-    """Read an x8D GGUF container, returning payloads and metadata.
+    """Read a raw x8D container, returning payloads and metadata.
 
     Args:
-        filename: path to the .gguf container.
+        filename: path to the .x8D container.
 
     Returns:
         ``(payloads, metadata)`` where payloads maps name -> raw U8 bytes.
     """
     with open(filename, "rb") as f:
-        magic = f.read(len(GGUF_MAGIC))
-        if magic != GGUF_MAGIC:
-            raise X8DHeaderError(
-                f"Not a valid x8D GGUF container (magic {magic!r} != {GGUF_MAGIC!r})"
-            )
-        f.seek(_HEADER_SIZE)  # skip magic + reserved version field
         payloads: Dict[str, bytes] = {}
         while True:
             name_len_b = f.read(4)
@@ -170,7 +150,7 @@ def load_gguf(filename: str) -> Tuple[Dict[str, bytes], Dict[str, object]]:
             name = f.read(name_len).decode("utf-8")
             (data_len,) = struct.unpack("<Q", f.read(8))
             payloads[name] = f.read(data_len)
-    return payloads, {"law": LAW, "container": "x8D GGUF U8"}
+    return payloads, {"law": LAW, "container": "x8D raw U8"}
 
 
 def mmap_load_gguf(filename: str) -> Tuple[mmap.mmap, Dict[str, object]]:
@@ -178,10 +158,10 @@ def mmap_load_gguf(filename: str) -> Tuple[mmap.mmap, Dict[str, object]]:
 
     Returns a read-only memory map over the whole file plus metadata. The
     caller can slice payloads out of the map directly -- no decompression
-    loop is ever run.
+    loop is ever run. There is no header or magic to skip.
 
     Args:
-        filename: path to the .gguf container.
+        filename: path to the .x8D container.
 
     Returns:
         ``(mapping, metadata)``.
@@ -192,9 +172,7 @@ def mmap_load_gguf(filename: str) -> Tuple[mmap.mmap, Dict[str, object]]:
         mapping = mmap.mmap(fd, file_size, access=mmap.ACCESS_READ)
     finally:
         os.close(fd)
-    if mapping[: len(GGUF_MAGIC)] != GGUF_MAGIC:
-        raise X8DHeaderError("Not a valid x8D GGUF container")
-    return mapping, {"law": LAW, "container": "x8D GGUF U8", "size_bytes": file_size}
+    return mapping, {"law": LAW, "container": "x8D raw U8", "size_bytes": file_size}
 
 
 def quantize_weights_from_bf16_checkpoint(source: BinaryIO, count: int) -> List[float]:
