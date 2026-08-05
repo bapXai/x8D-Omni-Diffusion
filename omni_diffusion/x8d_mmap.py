@@ -112,9 +112,13 @@ class MappedX8DReader:
             raise
         if self._mapping is None:
             raise X8DMmapError("mmap failed")
-        self.index: Dict[str, Tuple[int, int]] = build_payload_index(
-            bytes(self._mapping), base=0
-        )
+        try:
+            self.index: Dict[str, Tuple[int, int]] = build_payload_index(
+                bytes(self._mapping), base=0
+            )
+        except X8DMmapError:
+            # Raw .x8D container: the whole file IS one un-framed payload.
+            self.index = {"data": (0, self.size_bytes)}
         self.law: float = LAW
 
     # -- payload addressing -------------------------------------------------

@@ -93,13 +93,15 @@ class MappedX8DReaderTest(unittest.TestCase):
         self.assertEqual(reverse_bytes(b"\x02"), [2.0 / LAW])
 
     def test_bad_magic_rejected(self):
-        fd, path = tempfile.mkstemp(suffix=".gguf")
+        fd, path = tempfile.mkstemp(suffix=".x8D")
         os.close(fd)
         with open(path, "wb") as f:
             f.write(b"NOTX8D" + b"\x00" * 10)
         self._tmp_paths = [path]
-        with self.assertRaises(Exception):
-            MappedX8DReader(path)
+        # Magic-free .x8D contract: an un-framed raw file is a single payload.
+        with MappedX8DReader(path) as r:
+            self.assertEqual(r.names(), ["data"])
+            self.assertEqual(r.load("data"), b"NOTX8D" + b"\x00" * 10)
 
     def test_slice_out_of_range(self):
         path = _make_container({"w": b"ab"})

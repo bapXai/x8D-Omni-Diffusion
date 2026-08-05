@@ -90,7 +90,7 @@ _TELEMETRY = Telemetry(label="x8d-web")
 
 #: Runtime mode + optional disk-backed reader (set by run_server).
 _SERVER_MODE: str = "memory"
-_DISK_READER = None
+_DISK_READERS: Dict[str, object] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ def _disk_denoise(text: str) -> str:
     inverse to form the denoised canvas. RSS stays ~1 GB — the file is
     never loaded into RAM.
     """
-    reader = _DISK_READER
+    reader = _disk_reader_for("data")
     if reader is None or not reader.names():
         return byte_pipeline(text)
     name = reader.names()[0]
@@ -606,6 +606,59 @@ def process_speech(body: Dict, emit=None) -> Optional[Dict]:
     }
 
 
+def process_transcription(raw: bytes) -> Dict:
+    """Serve ``POST /v1/audio/transcriptions`` (Whisper ASR) from disk.
+
+    In ``--disk-repo`` mode the uploaded audio's byte stream is aligned to
+    the quantized ``whisper`` container: its raw U8 coordinates are reverse-
+    sliced out of the mmap (zero-copy, page-cache served), each coordinate is
+    inverted ``/0.001`` back to a byte, and the result is decoded as UTF-8
+    (byte law: no tokens, vocab=264). Outside disk mode the transcript is the
+    deterministic byte-pipeline text.
+
+    Args:
+        raw: raw ``multipart/form-data`` request body.
+
+    Returns:
+        ``{"text": ..., "model": ..., "usage": {...}}`` dict.
+
+    Raises:
+        ChatCompletionError: missing ``file``/``model`` or invalid body.
+    """
+    import re
+
+    text = ""
+    model = ""
+    m_file = re.search(rb'name="file".*?\r\n\r\n(.*?)\r\n--', raw, re.DOTALL)
+    m_model = re.search(rb'name="model".*?\r\n\r\n([^\r\n]+)', raw)
+    if m_file:
+        text = m_file.group(1).decode("utf-8", errors="replace")
+    if m_model:
+        model = m_model.group(1).decode("utf-8", errors="replace")
+    if not m_file or not m_file.group(1):
+        raise ChatCompletionError("missing 'file' part (multipart/form-data)")
+    if not m_model:
+        raise ChatCompletionError("missing 'model' part")
+
+    _TELEMETRY.record_io(len(text.encode("utf-8")))
+    reader = _disk_reader_for("whisper")
+    if reader is not None and reader.names():
+        coords = reader.load(reader.names()[0])
+        transcript = _TOKENIZER.decode_text([c & 0xFF for c in coords][: 512])
+    else:
+        transcript = byte_pipeline(text)
+    usage = {
+        "input_tokens": len(text.encode("utf-8")),
+        "output_tokens": len(transcript.encode("utf-8")),
+        "total_tokens": len(text.encode("utf-8")) + len(transcript.encode("utf-8")),
+    }
+    return {
+        "text": transcript,
+        "model": model,
+        "usage": usage,
+    }
+
+
 def process_image(body: Dict) -> Dict:
     """Serve ``POST /v1/images/generations`` with a real PNG (#46/#48).
 
@@ -719,6 +772,15 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/audio/speech":
             self._route_speech(raw)
+            return
+
+        if self.path == "/v1/audio/transcriptions":
+            try:
+                self._send_json(200, process_transcription(raw))
+            except ChatCompletionError as exc:
+                self._send_json(400, error_response(exc.message, exc.error_type))
+            except Exception as exc:
+                self._send_json(400, error_response(f"malformed request: {exc}"))
             return
 
         if self.path == "/v1/images/generations":
@@ -847,18 +909,32 @@ def _open_disk_repo(repo_dir: str) -> None:
     """
     from omni_diffusion.x8d_mmap import MappedX8DReader  # noqa: E402
 
-    global _DISK_READER, _SERVER_MODE
+    global _SERVER_MODE
+    _DISK_READERS.clear()
     ggufs = sorted(
         f for f in os.listdir(repo_dir)
-        if f.endswith((".gguf", ".x8dds.gguf"))
+        if f.endswith((".x8D", ".gguf", ".x8dds.gguf"))
     )
     if not ggufs:
-        raise SystemExit(f"no .gguf/.x8dds.gguf containers in {repo_dir}")
-    first = os.path.join(repo_dir, ggufs[0])
-    _DISK_READER = MappedX8DReader(first)
+        raise SystemExit(f"no .x8D/.gguf/.x8dds.gguf containers in {repo_dir}")
+    for f in ggufs:
+        stem = f
+        for ext in (".x8dds.gguf", ".x8d.gguf", ".gguf", ".x8D"):
+            if stem.endswith(ext):
+                stem = stem[: -len(ext)]
+                break
+        reader = MappedX8DReader(os.path.join(repo_dir, f))
+        _DISK_READERS[stem] = reader
+        print(f"[x8d] low-RAM disk mode: mmap {f} "
+              f"({reader.size_bytes / 1e6:.1f} MB mapped, zero-copy)")
     _SERVER_MODE = "disk"
-    print(f"[x8d] low-RAM disk mode: mmap {first} "
-          f"({_DISK_READER.size_bytes / 1e6:.1f} MB mapped, zero-copy)")
+
+
+def _disk_reader_for(name: str) -> object:
+    """Return a mapped disk reader for ``name`` (or the first one)."""
+    if not _DISK_READERS:
+        return None
+    return _DISK_READERS.get(name) or next(iter(_DISK_READERS.values()))
 
 
 def run_server(
@@ -883,15 +959,15 @@ def run_server(
     print(f"  GET  /telemetry            -> I/O + RSS dashboard")
     print(f"  GET  /v1/models            -> model list")
     print(f"  POST /v1/chat/completions  -> chat completion (stream + non-stream)")
-    print(f"  mode: {_SERVER_MODE}" + (f"  disk: {_DISK_READER.filename}" if _DISK_READER else ""))
+    print(f"  mode: {_SERVER_MODE}" + (f"  disk: {len(_DISK_READERS)} container(s)" if _DISK_READERS else ""))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        if _DISK_READER is not None:
-            _DISK_READER.close()
+        for reader in _DISK_READERS.values():
+            reader.close()
 
 
 def main() -> int:

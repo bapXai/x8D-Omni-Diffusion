@@ -461,7 +461,7 @@ class DiskRepoModeTest(unittest.TestCase):
 
         cls.srv = srv
         cls._old_mode = srv._SERVER_MODE
-        cls._old_reader = srv._DISK_READER
+        cls._old_readers = dict(srv._DISK_READERS)
         cls.tmpdir = tempfile.mkdtemp(prefix="x8d-disk-")
         cls.container = os.path.join(cls.tmpdir, "payload.x8d.gguf")
         save_gguf({"canvas": bytes(range(256)) * 4}, cls.container)
@@ -469,19 +469,21 @@ class DiskRepoModeTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.srv._SERVER_MODE = cls._old_mode
-        if cls._old_reader is not None:
-            cls._old_reader.close()
+        for reader in cls.srv._DISK_READERS.values():
+            reader.close()
+        cls.srv._DISK_READERS = cls._old_readers
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def test_open_disk_repo_switches_mode(self):
         self.srv._open_disk_repo(self.tmpdir)
         try:
             self.assertEqual(self.srv._SERVER_MODE, "disk")
-            self.assertIsNotNone(self.srv._DISK_READER)
-            self.assertEqual(self.srv._DISK_READER.names(), ["canvas"])
+            self.assertIn("payload", self.srv._DISK_READERS)
+            self.assertEqual(self.srv._DISK_READERS["payload"].names(), ["canvas"])
         finally:
-            self.srv._DISK_READER.close()
-            self.srv._DISK_READER = None
+            for reader in self.srv._DISK_READERS.values():
+                reader.close()
+            self.srv._DISK_READERS.clear()
 
     def test_disk_mode_completion(self):
         self.srv._open_disk_repo(self.tmpdir)
@@ -494,8 +496,9 @@ class DiskRepoModeTest(unittest.TestCase):
             self.assertIn("mode=disk", content)
             self.assertIn("disk mode hi", content)
         finally:
-            self.srv._DISK_READER.close()
-            self.srv._DISK_READER = None
+            for reader in self.srv._DISK_READERS.values():
+                reader.close()
+            self.srv._DISK_READERS.clear()
             self.srv._SERVER_MODE = "memory"
 
     def test_disk_mode_healthz(self):
@@ -505,8 +508,9 @@ class DiskRepoModeTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(payload["mode"], "disk")
         finally:
-            self.srv._DISK_READER.close()
-            self.srv._DISK_READER = None
+            for reader in self.srv._DISK_READERS.values():
+                reader.close()
+            self.srv._DISK_READERS.clear()
             self.srv._SERVER_MODE = "memory"
 
     def test_disk_denoise_returns_text(self):
@@ -516,8 +520,9 @@ class DiskRepoModeTest(unittest.TestCase):
             self.assertIsInstance(text, str)
             self.assertTrue(text)
         finally:
-            self.srv._DISK_READER.close()
-            self.srv._DISK_READER = None
+            for reader in self.srv._DISK_READERS.values():
+                reader.close()
+            self.srv._DISK_READERS.clear()
             self.srv._SERVER_MODE = "memory"
 
 

@@ -173,3 +173,6 @@ VLMEvalKit
 VLMEvalKit/*
 
 tests/_tmp_*
+
+# Browser automation artifacts (playwright MCP snapshots)
+.playwright-mcp/
