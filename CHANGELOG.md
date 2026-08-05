@@ -5,6 +5,30 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Added — #54 (2026-08-05)
+- **`omni_diffusion/x8d_byte_diffusion.py`** — merged byte-diffusion sampler
+  family (stdlib-only, no torch): `masked_denoise` (DREAM/Omni-Diffusion
+  absorbing-state masked transfer), `uniform_denoise` (DiffusionGemma
+  uniform-state: random-byte canvas, entropy-bound commit under
+  `diffusion_entropy_bound`, self-conditioning carry = softmax×embed analog,
+  adaptive stopping on stable top-1 + low entropy), and `reconstruct_block`
+  (NanoQuant-style block reconstruction with error-propagation mitigation +
+  teacher-guided renoise + lossless guard). `ByteModelSurrogate` stands in for
+  the torch denoiser over the 264-byte vocab; `SHARP_MIN→MAX` scheduler makes
+  the whole canvas commit in parallel late in denoising — the DiffusionGemma
+  parallel-canvas (not token-by-token) property.
+- **`tests/test_x8d_byte_diffusion.py`** — 25 tests covering all three modes:
+  byte-sanity (0-255), context preservation, determinism, entropy-bound
+  ordering, parallel canvas commit vs masked tail, self-conditioning trajectory
+  change, adaptive-stop firing, and lossless block reconstruction that
+  preserves already-correct positions.
+- **`generation_utils.py` `_sample()`** — new `alg == "entropy_bound"` branch:
+  cumulative-entropy budget over the 264 vocab, block-autoregressive pinning,
+  uniform-state renoise of rejected positions, self-conditioning carry, and
+  the hook/history tail preserved. Closes the config-vs-code gap
+  (`config_dream_resume.json` promised `entropy_bound` but it was unimplemented).
+- Full suite: **414 tests OK (8 skipped)**, ResourceWarning-clean.
+
 ### Added — #53 (2026-08-05)
 - **`research/Sub1-Bit-Quantization-2026.md`** — rewritten competitor landscape
   (live-web audit 2026-08-05): sub-1-bit weight quantizers (NanoQuant ICML'26

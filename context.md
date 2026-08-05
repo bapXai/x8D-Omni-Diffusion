@@ -204,6 +204,54 @@ Legend: ✅ done · 🟡 in progress · ❌ blocked/not done · 📌 queued
 - **Status:** ✅ done. Open: upload ltx2/kimi `.x8D` when streaming finishes;
   publish like-for-like benchmark vs NanoQuant/LittleBit/BTC-LLM.
 
+## Prompt 2026-08-05 (clarification on #53): "we are a diffusion model also for language — speed compares to token-by-token differently, we generate in batches"
+- **Ask:** Confirm that x8D is a LANGUAGE DIFFUSION model (Google
+  DiffusionGemma + our DREAM/Omni-Diffusion fork lineage), so the speed story
+  vs AR models is NOT "tok/s vs tok/s" — we generate in parallel/batches.
+- **Findings:** Correct. AR quantizers (NanoQuant's 20.11 tok/s, etc.) are
+  sequential bandwidth-bound decode: 1 token/forward pass, O(canvas_length)
+  passes. x8D is discrete byte diffusion: canvas commits in `steps=48`
+  denoising passes, every position denoised in parallel per step → wall-clock
+  ~ O(steps × blocks), flat vs canvas length. Block-autoregressive 8×8 commit
+  (#47) + DSpark block draft-verify = AR-parallel hybrid, never a pure MDM.
+  Same proof: DiffusionGemma's >1000 tok/s H100 on a 256-length canvas.
+- **Delivered:** Added "Language is diffusion: throughput framing vs AR"
+  section + Generation axis row to the positioning table in
+  `research/Sub1-Bit-Quantization-2026.md`; NanoQuant deep-dive numbers
+  (Table 4/7, LB-ADMM vs Dual-SVID, HBLLM baseline) folded in.
+- **Status:** ✅ done.
+
+## Prompt 2026-08-05 (#54): "test and improvise comparing omni diffusion and diffusiongemma modes how it made and the NanoQuant to improvise x8D omni diffusion"
+- **Ask:** Test and improve x8D-Omni-Diffusion by comparing how Omni-Diffusion
+  (DREAM), DiffusionGemma, and NanoQuant are made, and borrow the best ideas.
+- **Findings — gap analysis:** `generation_config.json`/`config_dream_resume.json`
+  already promise `alg="entropy_bound"`, `diffusion_entropy_bound=0.1`,
+  `steps=48`, `canvas_length=256`, `self_conditioning=true` — but
+  `generation_utils._sample()` never implemented `entropy_bound` (only
+  origin/maskgit_plus/topk_margin/entropy/entropy-penalty), and the pure-Python
+  reference sampler (`ByteDiffusionSampler`) was random-fill with no
+  DiffusionGemma/NanoQuant machinery.
+- **Delivered (#54, issue opened 2026-08-05):**
+  - **NEW `omni_diffusion/x8d_byte_diffusion.py`** (stdlib-only) — merged sampler
+    family: `masked_denoise` (DREAM absorbing-state), `uniform_denoise`
+    (DiffusionGemma uniform-state: random-byte canvas, entropy-bound commit,
+    self-conditioning carry, adaptive stop), `reconstruct_block` (NanoQuant
+    block reconstruction with error-propagation mitigation + teacher-guided
+    renoise + lossless guard). `ByteModelSurrogate` stands in for the torch
+    denoiser; `SHARP_MIN→MAX` schedule makes the whole canvas commit in
+    parallel late in denoising (DiffusionGemma's parallel-canvas property).
+  - **NEW `tests/test_x8d_byte_diffusion.py`** — 25 tests: byte-sane + context-
+    preserving + deterministic for all three modes; entropy-bound ordering;
+    parallel canvas commit vs masked tail; self-conditioning changes trajectory;
+    adaptive stop fires; reconstruction converges lossless and preserves
+    already-correct positions.
+  - **`generation_utils.py`** — added `alg == "entropy_bound"` branch to
+    `_sample()`: cumulative-entropy budget over 264 vocab, block-autoregressive
+    pinning, uniform-state renoise of rejected positions, self-conditioning
+    carry (softmax×embed analog), hook/history tail preserved.
+  - Full suite: **414 tests OK (8 skipped)**; ResourceWarning-clean.
+- **Status:** 🟡 code + tests done; tracking docs + commit + dual-sync pending.
+
 ---
 
 ## Standing rules derived from the prompts

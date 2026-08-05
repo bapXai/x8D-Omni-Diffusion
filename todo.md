@@ -33,6 +33,7 @@ GitHub issue where applicable.
       is available — replace the `_pseudo_logits` surrogate with the real torch denoiser over ids 0-255.
 
 ## 🏗️ Rebranding & Repo Hygiene
+- [x] [#54] Merged byte-diffusion sampler family: NEW `omni_diffusion/x8d_byte_diffusion.py` (masked DREAM + uniform DiffusionGemma + NanoQuant reconstruct; entropy-bound commit, self-conditioning carry, adaptive stop, teacher-guided block renoise) + NEW `tests/test_x8d_byte_diffusion.py` (25 tests) + `alg="entropy_bound"` branch wired into `generation_utils._sample()` (264-vocab budget, block pinning, uniform renoise, self-conditioning). Suite 414 OK (8 skipped), ResourceWarning-clean. [TODO: commit + close #54 + sync runtime file to HF]
 - [x] [#53] Enforce GitHub-vs-HF repo split: deleted HF pollution (AGENTS.md, research .md, tools/, omni_diffusion/ dupe, x8d_* serving modules, omni_chat_probe/omni_size_report); rebuilt broken HF `config.json` (auto_map -> DreamModel/DreamConfig + full arch params); re-synced stale runtime files; fixed `.gitattributes` (x8d_weights/*.x8D LFS). HF tree now = exact trust_remote_code runtime set.
 - [ ] [#53] Publish like-for-like size/benchmark vs NanoQuant / LittleBit / BTC-LLM on the same model (e.g. Llama-2-7B/13B) into `research/Sub1-Bit-Quantization-2026.md`.
 - [ ] [#53] Track ICLR'26 "Efficiency Gap in Byte Modeling" (byte MDM < byte AR); keep block-autoregressive + DSpark hybrid.

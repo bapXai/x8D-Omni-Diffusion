@@ -49,10 +49,11 @@ even the most extreme sub-1-bit quantizer, and the container is the running stat
 
 | Method | Type | Bits/weight | How | Result / note | x8D map |
 |---|---|---|---|---|---|
-| **NanoQuant** (ICML 2026, SamsungLabs) | PTQ | sub-1-bit | low-rank binary matrix factorization + scales; ADMM init; block/model reconstruction | Llama2-70B 138 GB → 5.35 GB (25.8×) on 1 H100, 8 GB GPU, 20.11 tok/s | our factor/coordinate packing is the storage side; NanoQuant needs 128 calib samples + reconstruction, x8D needs none (bijective) |
+| **NanoQuant** (arXiv 2602.06694, Feb 2026 — Chong, Kim, Kim, Choi) | PTQ | 0.55–1.00 bit | **low-rank binary factorization** `W ≈ s₁ ⊙ (U±₁·V±₁ᵀ) ⊙ s₂ᵀ`; Hessian-aware ADMM (LB-ADMM) init; block + model reconstruction | **first PTQ to hit sub-1-bit**; L2-70B 138.04 GB → 5.35 GB (25.8×) on 1 H100, 13 h, runs on 8 GB GPU @ 20.11 tok/s; needs 128 calib samples (0.26M tok) | LOSSY (PPL 5.47→10.34 @1 bit), needs calibration + block/model reconstruction; x8D 0.001 law (0.008 bit/byte = 1000:1) is LOSSLESS bijective, no calibration, container IS running state |
 | **LittleBit** (NeurIPS 2025) / **LittleBit-2** (ICML 2026, SamsungLabs) | QAT | 0.1–1.0 BPW | `W ≈ U·Vᵀ` low-rank latent factorization, binarize factors, multi-scale (row/col/latent) compensation; Dual-SVID init + residual compensation | 0.1 BPW on Llama2-13B → **0.84 GB** (31×); Llama2-70B → 1.98 GB (69.7×); 0.1 BPW beats STBLLM at 0.7 BPW; 11.6× kernel speedup | x8D coordinate packing = a static coarse LittleBit-style scale; STE/QAT phase 4 mirrors their Dual-SVID + residual |
 | **BTC-LLM** (ACL 2026) | PTQ/QAT | 0.7–1.11 bits | binary codebook (clustered ±1 vectors → compact indices) + learnable incoherence transform (D±, P Kronecker) | LLaMA-2-13B @ 0.8 bit only −3.1% zero-shot; 1.6× over FP16; storage ≈ `16·v/log2(c)` | x8D's 0-255 coordinate codebook is a finer-grained codebook over raw bytes |
 | **BiLLM** | PTQ | ~1 bit | binary with grouped (salt/structured) scales | metadata pushes effective to ~2.88 bit | per-block scale analog |
+| **HBLLM** (arXiv 2512.00862, 2025) | PTQ | ~1 bit | wavelet-enhanced 1-bit PTQ | 3.25 effective bit; beats ARB-LLM/BiLLM on PPL | — |
 | **STBLLM** | PTQ | ~0.5-1 bit | N:M sparsity + binarization | effective ~4.13 bit due to masks; degrades hard below 0.5 | sparse binary blocks analog |
 | **ARB-LLM** | PTQ | ~1 bit | alternating refinement binarization | — | iterative coordinate refine |
 | **QMoE** | — | sub-1-bit | MoE-targeted extreme compression | targets MoE models only | our MoE/SARA expert slice |
@@ -71,6 +72,46 @@ even the most extreme sub-1-bit quantizer, and the container is the running stat
 - These competitors change the *weights*; x8D additionally changes the *modeling*
   vocabulary (bytes, no tokenizer) — see Family 2.
 
+### NanoQuant deep-dive (arXiv 2602.06694, Feb 2026)
+
+**Claim**: first post-training method to compress LLMs to both binary (1-bit) AND
+sub-1-bit levels, with only 128 calibration samples (0.26M tokens) + 1 GPU.
+
+**Mechanism** (`W ≈ s₁ ⊙ (U±₁·V±₁ᵀ) ⊙ s₂ᵀ`):
+1. **Hessian-aware preconditioning** — K-FAC diagonal approximation, shrinkage
+   regularized (γ≈0.2 Llama/Qwen, 0.6 Gemma/Rnj).
+2. **LB-ADMM init** — alternating direction method of multipliers with ridge
+   regularization + SVID consensus; Cholesky-stabilized, O(r³/3) per factor step.
+3. **Magnitude balancing** — η = ‖V‖/‖U‖ equilibrium; scales s₁,s₂ = mean|·| of
+   balanced row/col proxies.
+4. **Block reconstruction** — error-propagation mitigation (tune FP weights of
+   current block for prior quantization error) → low-rank binary init → STE
+   refinement of latents+scales per block.
+5. **Model reconstruction** — frozen packed binaries; global scale-only KL
+   logit-distillation calibration.
+
+**Results (Table 4, L2-7B)**: 1.00 bit → 1.24 GB, PPL 10.34 with 0.26M tokens
+(1.7 GPU-h) or 8.85 with 2.10M tokens; QAT baselines need 155M-1.38B tokens /
+37-700 GPU-h for PPL 7.88-9.73. **Table 7 (Q3-4B/L2-7B @1 bit)**: NanoQuant
+1.05M tok / 2.3 GPU-h → PPL 12.62/9.01 vs LittleBit 169.5M/196M tok / 92.5/123.6
+GPU-h (14.79/9.08) and DBF 1.19B/1.38B tok (14.62/9.25). **L2-70B**: 138.04 GB →
+5.35 GB (25.8×) in 13 h on 1 H100; 8 GB consumer GPU, 20.11 tok/s. Custom binary
+GEMV/GEMM kernels: 3.6-4× throughput, 5.4× lower peak mem, 3.9× energy (RTX
+3050); up to 10× lower mem on H100.
+
+**Key limitation**: NanoQuant is LOSSY. PPL degrades monotonically with
+compression (L2-7: 5.47 → 10.34 @1.00 bit → 12.20 @0.80 → 16.66 @0.55), and
+needs calibration data + block/model reconstruction (13 GPU-h for 70B) — its
+5.35 GB is still 38× larger than x8D's 0.001-law size for the same model
+(138.04 GB × 0.001 = 138 MB, lossless). x8D's 0.008 bit/byte coordinate law
+also sits ~125× below NanoQuant's 1.00 bit/weight on a raw-bitrate basis, with
+no calibration, no reconstruction, and no custom kernels (mmap IS the kernel).
+
+**Direct x8D delta**: x8D swaps NanoQuant's *lossy numerical approximation
+problem* (ADMM + STE + KD) for a *bijective coordinate map* (`byte × 0.001`,
+reverse exact). Where NanoQuant trades fidelity for 25.8×, x8D trades nothing
+for 1000× — and the serving contract is byte-exact by construction.
+
 ---
 
 ## Family 2 — Byte-based / tokenizer-free models (modeling competitors)
@@ -87,7 +128,37 @@ stack that is BOTH byte-native AND sub-byte compressed end-to-end.
 | **ByteFlow Net** (2026) | 2026 | bytes → coding-rate chunks | hierarchical: local encoder → coding-rate chunking → global transformer | outperforms BPE Transformers and prior byte models; adaptive boundaries via coding rate | our `canvas_length`/block commit analog; compression-driven segmentation |
 | **Proxy compression** (2026) | 2026 | bytes + compressed views | joint train raw bytes + compressor views; raw-byte interface at inference | beats pure byte baselines; matches tokenizer at scale | our x8d_dataset byte-stream framing is a static compressor view |
 | **Byte-diffusion efficiency gap** (ICLR 2026 workshop) | 2026 | bytes | masked diffusion (MDM) on bytes | **caution**: byte-level MDMs scale worse than byte AR — isoFLOPs parity ~4×10²⁶ vs AR ~10²² | motivation for block-autoregressive canvas commit + DSpark rather than pure parallel MDM |
-| **Google DiffusionGemma** (2025) | 2025 | subword | discrete diffusion over tokens | text diffusion proves the sampler; canvas_length=256, entropy_bound | x8D applies the same sampler over the 264-vocab byte space (#5/#6) |
+| **Google DiffusionGemma** (2025) | 2025 | subword | discrete diffusion over tokens | text diffusion proves the sampler; canvas_length=256, entropy_bound, block-autoregressive canvas commit, >1000 tok/s H100 | x8D applies the same sampler over the 264-vocab byte space (#5/#6) — **language generation is parallel, not token-by-token** |
+
+### Language is diffusion: throughput framing vs AR
+
+x8D is a **discrete diffusion model for language** (same paradigm as Google
+DiffusionGemma, same lineage as our DREAM/Omni-Diffusion fork), so comparing it
+to AR quantizers on *tokens-per-second* is apples-to-oranges. This matters for
+every "tok/s" figure quoted in Family 1/2 — NanoQuant's 20.11 tok/s (L2-70B,
+8 GB GPU) and the AR baselines are **sequential, bandwidth-bound decode**: one
+token per forward pass, throughput capped by weight bandwidth.
+
+x8D/DiffusionGemma generate **the whole canvas in parallel per denoising step**:
+- A 256-byte canvas commits in `steps=48` denoising passes (entropy_bound
+  sampler, `diffusion_entropy_bound=0.1`), NOT 256 sequential passes — each
+  step denoises every position at once, so wall-clock scales with **steps
+  (48)**, not canvas length.
+- Block-autoregressive 8×8 commit (#47) = generate each 8×8 byte block in
+  parallel, commit, move to the next block — an AR-parallel hybrid, not a
+  pure parallel MDM (which the ICLR'26 efficiency-gap paper flags).
+- DSpark speculative decode (#47) = semi-autoregressive block draft-verify:
+  propose the whole 8×8 block in parallel, confidence-head survives positions
+  ≥0.001, re-mask + regenerate the rest. Same draft-verify loop as AR spec-
+  decode, but in the block domain.
+
+So the honest speed comparison is **bytes of canvas per wall-second**, where
+AR decode is O(canvas_length) forward passes and byte diffusion is
+O(steps × blocks). At long canvases the diffusion curve wins flat; that is
+exactly DiffusionGemma's >1000 tok/s on H100 with a 256-length canvas. Our
+NanoQuant comparison should therefore never be pitched as "tok/s vs tok/s" —
+it's "25.8× LOSSY storage with sequential AR decode" vs "1000:1 LOSSLESS
+storage with parallel canvas commit".
 
 **Key structural facts from the literature:**
 - Byte-level modeling is a proven, active direction (MambaByte → BLT → ByteFlow)
@@ -114,6 +185,7 @@ stack that is BOTH byte-native AND sub-byte compressed end-to-end.
 | Serving | decompress → load → run | **compressed state IS running state (mmap, no decompression)** |
 | Vocabulary | BPE/subword (NanoQuant etc.) or bytes (BLT/ByteFlow) | **bytes (264) end-to-end** |
 | Modality | text-only (most), text+image (BLT byte enc) | **text/image/audio/video bytes at ids 0-255** |
+| Generation | AR decode (O(len) passes, bandwidth-bound) | **language diffusion: parallel canvas (O(steps) passes), block-AR commit + DSpark** |
 | Training | standard AR or diffusion on tokens | **byte diffusion + block-autoregressive commit + DSpark (#47)** |
 
 ## Actionable gaps (from this audit)
@@ -122,6 +194,8 @@ stack that is BOTH byte-native AND sub-byte compressed end-to-end.
 2. **Benchmark like-for-like** — publish x8D `.x8D` size vs NanoQuant/LittleBit/
    BTC-LLM on the same model (e.g. Llama-2-7B/13B) as a `research/` table, and
    round-trip lossless proof (already have 389 tests + Whisper/Kokoro proofs).
+   Headline for the doc: same L2-70B — NanoQuant 5.35 GB (lossy, 13 GPU-h
+   calibration) vs x8D 138 MB (lossless, no calibration, 1000:1).
 3. **Byte-diffusion efficiency risk** — track the ICLR 2026 efficiency-gap paper;
    keep the block-autoregressive + DSpark hybrid (never a pure parallel MDM).
 4. **BLT-patch analog** — consider entropy-bound 8x8 block sizing as the BLT-patch

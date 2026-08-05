@@ -565,6 +565,68 @@ class DreamGenerationMixin:
                             margin_confidence=True,
                             max_position_penalty=max_position_penalty,
                         )
+                    elif alg == 'entropy_bound':
+                        # DiffusionGemma entropy-bound sampler over the 264-byte
+                        # vocab (AGENTS.md #54). Accept positions greedily while
+                        # the running sum of entropies stays under
+                        # diffusion_entropy_bound; re-noise rejected positions
+                        # with random bytes (uniform-state renoise, no MASK).
+                        probs = F.softmax(mask_logits, dim=-1)
+                        eps_entropy = 1e-10
+                        log_probs = torch.log(probs + eps_entropy)
+                        entropy = -(probs * log_probs).sum(dim=-1)
+                        # block-autoregressive commit: positions outside the
+                        # current block are pinned out of the budget.
+                        block_mask_1 = block_mask[mask_index[0]]
+                        pinned = torch.where(
+                            block_mask_1, torch.zeros_like(entropy), entropy
+                        )
+                        pinned = torch.where(
+                            block_mask_1, entropy, torch.full_like(entropy, float("inf"))
+                        )
+                        order = torch.argsort(pinned)
+                        cum_entropy = torch.cumsum(pinned[order], dim=0)
+                        budget = float(
+                            getattr(generation_config, "diffusion_entropy_bound", 0.1)
+                        )
+                        accept = cum_entropy <= budget
+                        if not bool(accept.any()):
+                            accept[0] = True
+                        transfer_index = order[accept]
+                        _, x0 = sample_tokens(
+                            mask_logits,
+                            temperature=temperature,
+                            top_p=top_p,
+                            top_k=top_k,
+                            max_position_penalty=max_position_penalty,
+                        )
+                        x0_ = torch.zeros_like(x0, device=self.device, dtype=torch.long) + mask_token_id
+                        x0_[transfer_index] = x0[transfer_index].clone()
+                        x[mask_index] = x0_
+                        # uniform-state renoise for the rejected positions
+                        reject_index = order[~accept]
+                        if reject_index.numel() > 0:
+                            import random as _random
+                            renoised = torch.zeros_like(x0_, device=self.device, dtype=torch.long)
+                            renoised[reject_index] = torch.tensor(
+                                [_random.randint(0, 255) for _ in range(reject_index.numel())],
+                                device=self.device, dtype=torch.long,
+                            )
+                            x[mask_index][reject_index] = renoised[reject_index]
+                        # self-conditioning carry (probability-weighted byte
+                        # expectation, DiffusionGemma softmax x embed analog)
+                        if getattr(generation_config, "self_conditioning", False):
+                            carry = (probs * torch.arange(probs.shape[-1], device=probs.device)).sum(dim=-1)
+                            x[mask_index] = torch.where(
+                                x[mask_index] == mask_token_id,
+                                torch.clamp(carry[mask_index[0]].long(), 0, 255),
+                                x[mask_index],
+                            )
+                        x = generation_tokens_hook_func(i, x, logits)
+                        if histories is not None:
+                            histories.append(x.clone())
+                            all_logit.append(torch.max(logits.clone(), -1)[-1])
+                        continue
                     elif alg == 'entropy':
                         confidence, x0 = sample_tokens(
                             mask_logits,
