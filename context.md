@@ -300,3 +300,9 @@ Legend: ✅ done · 🟡 in progress · ❌ blocked/not done · 📌 queued
 5. **Dual commit**: GitHub + HF model repo; verify with `gh run list` and `hf models list -R`.
 6. **Dense model = one expert; internal-MoE = isolated expert** (SARA boundaries).
 7. **Prove the job**: tests must pass, CI validated, HF synced, AGENTS.md + research/ updated.
+
+
+## 2026-11-14 · 🟡 System 1 exact calculator terminal tool (#73)
+- **Ask:** Ordinary arithmetic must run on a proper deterministic calculator instead of spending inference/chain-of-thought; show concise numeric results in terminal/UI and support model tool calls.
+- **Implementation PR:** `tools/x8d_calculator.py` uses bounded exact rational arithmetic; `tools/openai_chat_server.py` adds typed `POST /v1/tools/calculate` and an explicit simple-math chat fast path, without pretending trained model routing exists. See `docs/CALCULATOR.md`, tests and #67.
+- **Status:** 🟡 PR under review; host tool functions without learned x8D weights, trained System 1 tool policy pending.
