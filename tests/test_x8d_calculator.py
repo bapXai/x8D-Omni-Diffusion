@@ -64,6 +64,8 @@ class CalculatorTest(unittest.TestCase):
         self.assertIsNone(fast_path_expression("what is the weather?"))
         self.assertIsNone(fast_path_expression("2+ print(3)"))
         self.assertIsNone(fast_path_expression("hi"))
+        self.assertEqual(fast_path_expression("what is 1/0?"), "1/0")
+        self.assertEqual(fast_path_expression("calculate 3+"), "3+")
 
     def test_cli(self):
         p = subprocess.run(
