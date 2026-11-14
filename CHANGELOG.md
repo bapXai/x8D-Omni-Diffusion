@@ -5,6 +5,11 @@ Format: `[#issue]` references GitHub issues; commits are on `main`.
 
 ## [Unreleased]
 
+### Added — #73 (2026-11-14, pending PR review)
+- Exact bounded terminal CPU calculator (`tools/x8d_calculator.py`) with rational arithmetic, arithmetic-only host fast path, and `POST /v1/tools/calculate` endpoint. Structured results distinguish exact fractions from rounded decimal display; no model weights, shell or GPU dependency.
+- Unit and HTTP tests: `tests/test_x8d_calculator.py`, `tests/test_x8d_calculator_server.py`; tool contract and examples in `docs/CALCULATOR.md`. Note: model selection of tools remains future training work (#67/#68).
+
+
 ### Added — #55 (2026-08-06)
 - **`tools/quantize_hf_safetensors.py`** — rebuilt as a **resumable chunked
   streaming quantizer**. Root cause of the LTX-2 / Kimi-K3 failures: one
