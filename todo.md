@@ -6,6 +6,15 @@ GitHub issue where applicable.
 
 ---
 
+## 🧮 Deterministic System 1 calculator host tool (#73, 2026-11-14)
+- [x] Define exact CPU arithmetic grammar and bounded JSON/tool contract.
+- [x] Implement terminal CLI and small arithmetic fast path in chat server.
+- [x] Add offline tests for arithmetic, errors, terminal and HTTP handler.
+- [~] Review PR, run full repository test suite/CI, then merge.
+- [ ] Train/evaluate System 1 selection of calculator tool after #67/#68/#69; preserve explicit host policy and auditable result.
+
+---
+
 ## 🗜️ Resumable streaming quantizer (#55, 2026-08-06)
 - [x] Root-cause: single `urlopen(timeout=120)` stream + `r.read(1 MiB)` loop died on
       any stall >120 s (`TimeoutError`, ssl.py:1138) — killed LTX-2 @2.82 GB and Kimi mid-shard.
