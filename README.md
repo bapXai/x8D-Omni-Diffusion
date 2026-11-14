@@ -395,3 +395,17 @@ If you find our work helpful for your research, please consider citing our work.
   year={2026}
 }
 ```
+
+
+## Deterministic calculator host tool (experimental, #73)
+
+Simple arithmetic can bypass the untrained generation/sampler path and use a bounded exact CPU calculator. This is a **host tool**, not a claim that the current model has learned to call it:
+
+```bash
+python3 tools/x8d_calculator.py '0.1 + 0.2'
+# 0.3
+python3 tools/x8d_calculator.py '20% of 150' --json
+# {"ok":true,"result":"30","fraction":"30","rounded":false,"precision":24}
+```
+
+Model/host clients can call `POST /v1/tools/calculate` with `{"expression":"(12+3)*4"}`. Tool result/error schemas, limitations and tests: [docs/CALCULATOR.md](docs/CALCULATOR.md). The future trained System 1/2 router/tool-observation integration is tracked in #67.
