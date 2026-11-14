@@ -218,8 +218,10 @@ def fast_path_expression(message: str) -> str | None:
         return None
     try:
         _Parser(tokens).parse()
-    except CalculationError:
-        return None
+    except CalculationError as exc:
+        # Mathematical errors still belong to the calculator, not the
+        # synthetic model fallback. General prose/invalid syntax does not.
+        return candidate if match or exc.code in ("division_by_zero", "invalid_exponent", "resource_limit") else None
     return candidate
 
 
