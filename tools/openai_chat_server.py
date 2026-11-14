@@ -23,6 +23,7 @@ Endpoints:
     GET  /telemetry            -> telemetry dashboard
     GET  /v1/models            -> {"object": "list", "data": [{...}]}
     POST /v1/chat/completions  -> OpenAI completion (stream + non-stream)
+    POST /v1/tools/calculate   -> deterministic exact CPU calculator (issue #73)
     POST /v1/audio/speech      -> real WAV/PCM audio (SSE + non-stream, #46/#48)
     POST /v1/images/generations -> real PNG image (b64_json, #46/#48)
     POST /v1/videos/generations -> real AVI video (b64_json, #48)
@@ -67,6 +68,7 @@ from omni_diffusion.x8d_spec_decode import (  # noqa: E402
     dspark_generate,
 )
 from omni_diffusion.x8d_telemetry import Telemetry  # noqa: E402
+from tools.x8d_calculator import fast_path_expression, tool_call  # noqa: E402
 
 DEFAULT_PORT: int = 666
 DEFAULT_HOST: str = "0.0.0.0"
@@ -375,6 +377,12 @@ def _iter_byte_deltas(text: str, chunk_bytes: int = 24) -> List[str]:
 
 def _chat_content(last_user: str) -> str:
     """Deterministic assistant content: echo + byte-pipeline denoise result."""
+    # Deterministic CPU tool fast path. This is a host rule, NOT learned model routing.
+    expression = fast_path_expression(last_user)
+    if expression is not None:
+        result = tool_call({"expression": expression})
+        return result["result"] if result["ok"] else f"Calculator error: {result['error']['message']}"
+
     if _SERVER_MODE == "disk":
         denoised = _disk_denoise(last_user)
     else:
@@ -751,7 +759,20 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """Route POST: chat completions, audio speech, image generations."""
         content_length = int(self.headers.get("Content-Length", 0) or 0)
+        if self.path == "/v1/tools/calculate" and content_length > 2048:
+            self._send_json(413, {"ok": False, "error": {"code": "resource_limit", "message": "request too large"}})
+            return
         raw = self.rfile.read(content_length)
+
+        if self.path == "/v1/tools/calculate":
+            try:
+                request = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_json(400, {"ok": False, "error": {"code": "invalid_request", "message": "malformed JSON"}})
+                return
+            result = tool_call(request)
+            self._send_json(200 if result["ok"] else 400, result)
+            return
 
         if self.path == "/v1/chat/completions":
             wants_stream = False
