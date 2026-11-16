@@ -883,7 +883,15 @@ See `research/Needle-Dependency-Audit.md` for the full analysis.
 - All byte operations use unsigned 8-bit integers (`torch.uint8` or `np.uint8`)
 
 
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:80f38de2e2a5d750625c2977e6f9ea7d9f7a7bb3e2b84bd6270e68b9b95e87c2 -->
+
 ## System 1 arithmetic host tool (#73; 2026-11-14)
+
+Review audit (2026-11-16): reject invalid request lengths before body reads, contain JSON recursion errors, and retain typed calculator resource-limit responses for arithmetic chat input. CLI leading negatives require `--`.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - Simple arithmetic belongs to the **deterministic CPU calculator**, not a neural reasoning chain. Use `tools/x8d_calculator.py` and the exact `tool_call({expression, precision?})` schema; no `eval`, shell or Python code supplied by a model.
 - Terminal default outputs only the number; `--json` and `POST /v1/tools/calculate` return the exact rational, display-rounded decimal and typed errors. See `docs/CALCULATOR.md`.
 - Clearly recognized arithmetic may use a host fast path. **Do not claim** an untrained x8D model learned to choose the tool. When trained, System 1 and System 2 can both request it through #67's validated external-action boundary. Calculator must not be represented as an MoE weight expert or an additional byte vocabulary state.

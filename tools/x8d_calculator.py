@@ -21,7 +21,7 @@ MAX_SCI_EXP_ABS = 100
 MAX_PRECISION = 60
 DEFAULT_PRECISION = 24
 _NUMBER_RE = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", re.ASCII)
-_PROMPT_RE = re.compile(r"^\s*(?:calculate|compute|what\s+is)\s+(.+?)\s*\??\s*$", re.IGNORECASE)
+_PROMPT_RE = re.compile(r"^\s*(?:calculate|compute|what\s+is)\s+(.+?)\s*\??$", re.IGNORECASE)
 
 
 class CalculationError(ValueError):
@@ -38,10 +38,10 @@ def _bounded(value: Fraction) -> Fraction:
     return value
 
 
-def _lex(expression: str) -> list[str]:
+def _lex(expression: str, *, enforce_limits: bool = True) -> list[str]:
     if not isinstance(expression, str) or not expression.strip():
         raise CalculationError("invalid_expression", "expression must be a non-empty string")
-    if len(expression) > MAX_EXPRESSION_CHARS:
+    if enforce_limits and len(expression) > MAX_EXPRESSION_CHARS:
         raise CalculationError("resource_limit", "expression exceeds length limit")
     result: list[str] = []
     i = 0
@@ -66,15 +66,15 @@ def _lex(expression: str) -> list[str]:
         if match:
             literal = match.group(0)
             exponent_part = re.search(r"[eE]([+-]?\d+)$", literal)
-            if exponent_part and (len(exponent_part.group(1).lstrip("+-")) > 3 or abs(int(exponent_part.group(1))) > MAX_SCI_EXP_ABS):
+            if enforce_limits and exponent_part and (len(exponent_part.group(1).lstrip("+-")) > 3 or abs(int(exponent_part.group(1))) > MAX_SCI_EXP_ABS):
                 raise CalculationError("resource_limit", "scientific exponent exceeds limit")
-            if sum(ch.isdigit() for ch in literal) > MAX_LITERAL_DIGITS:
+            if enforce_limits and sum(ch.isdigit() for ch in literal) > MAX_LITERAL_DIGITS:
                 raise CalculationError("resource_limit", "numeric literal exceeds digit limit")
             result.append(literal)
             i = match.end()
             continue
         raise CalculationError("invalid_expression", f"unsupported character at offset {i}")
-    if len(result) > 128:
+    if enforce_limits and len(result) > 128:
         raise CalculationError("resource_limit", "too many expression terms")
     return result
 
@@ -211,13 +211,15 @@ def fast_path_expression(message: str) -> str | None:
     if candidate.endswith("?"):
         candidate = candidate[:-1].strip()
     try:
-        tokens = _lex(candidate)
+        # Recognize the complete lexical input before applying evaluation limits.
+        # This keeps excessive arithmetic on the tool path and rejects prose.
+        tokens = _lex(candidate, enforce_limits=False)
     except CalculationError:
         return None
     if not tokens or (not match and not any(t in "+-*/^%" or t == "of" for t in tokens)):
         return None
     try:
-        _Parser(tokens).parse()
+        _Parser(_lex(candidate)).parse()
     except CalculationError as exc:
         # Mathematical errors still belong to the calculator, not the
         # synthetic model fallback. General prose/invalid syntax does not.
@@ -227,7 +229,7 @@ def fast_path_expression(message: str) -> str | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Exact CPU calculator; no model or CUDA required")
-    parser.add_argument("expression", help="Arithmetic expression, e.g. '20% of 150 + 0.1'")
+    parser.add_argument("expression", help="Arithmetic expression; use -- before leading negatives, e.g. -- '-2^2'")
     parser.add_argument("--json", action="store_true", help="Return a structured tool result")
     parser.add_argument("--precision", type=int, default=DEFAULT_PRECISION, help="Decimal places (0..60)")
     args = parser.parse_args(argv)

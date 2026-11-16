@@ -17,7 +17,17 @@ Run from the repo root:
     python3 tools/x8d_calculator.py '1 / 3' --json
     # {"ok":true,"result":"0.333333333333333333333333","fraction":"1/3","rounded":true,"precision":24}
 
-Use argv arrays rather than shell interpolation in a tool runner. The CLI returns exit code 0 on success and 2 on invalid requests. Default output is only the result, not a reasoning trace. Structured JSON is available for tools and auditing.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:b36aafd230c775323766251028e31ec5f0420adc5e4740505141565d9ca7a35c -->
+
+For leading-negative expressions, put options before the `--` separator: `python3 tools/x8d_calculator.py --json -- '-2^2'` returns result `-4`.
+
+Use argv arrays rather than shell interpolation in a tool runner.
+
+<!-- /coderabbit-ai-generated:v1 -->
+
+The CLI returns exit code 0 on success and 2 on invalid requests. Default output is only the result, not a reasoning trace. Structured JSON is available for tools and auditing.
 
 Operators: +, -, *, /, ^ (or **), parentheses, scientific notation and postfix %. The word "of" is multiplication, e.g. "20% of 150". Percent is **always divided by 100**: to increase 200 by 10%, say "200 + (200 * 10%)" (result 220), not the ambiguous "200 + 10%".
 

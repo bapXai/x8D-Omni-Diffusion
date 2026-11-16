@@ -67,6 +67,28 @@ class CalculatorTest(unittest.TestCase):
         self.assertEqual(fast_path_expression("what is 1/0?"), "1/0")
         self.assertEqual(fast_path_expression("calculate 3+"), "3+")
 
+    def test_fast_path_resource_limits(self):
+        for expression in ("1e999999+1", "9" * 81 + "+1", "1+" * 128 + "1"):
+            for prefix in ("", "calculate "):
+                message = prefix + expression
+                with self.subTest(message=message):
+                    candidate = fast_path_expression(message)
+                    self.assertEqual(candidate, expression)
+                    self.assertEqual(tool_call({"expression": candidate})["error"]["code"], "resource_limit")
+        for message in ("prose " * 100, "calculate " + "prose " * 100, "1e999999+prose", "9" * 81 + " apples"):
+            self.assertIsNone(fast_path_expression(message))
+
+    def test_prompt_whitespace(self):
+        for message in ("  What is 25 * 4?  ", "compute 25 * 4   ?", "calculate 25 * 4   "):
+            self.assertEqual(fast_path_expression(message), "25 * 4")
+
+    def test_cli_negative_expression(self):
+        p = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "x8d_calculator.py"), "--json", "--", "-2^2"],
+            capture_output=True, text=True, timeout=5, check=True,
+        )
+        self.assertEqual(json.loads(p.stdout)["result"], "-4")
+
     def test_cli(self):
         p = subprocess.run(
             [sys.executable, os.path.join(ROOT, "tools", "x8d_calculator.py"), "0.1+0.2", "--json"],
