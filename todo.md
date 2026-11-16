@@ -119,3 +119,19 @@ gh run list --limit 5
 hf auth whoami
 hf models list bapX/x8D-Omni-Diffusion -R
 ```
+
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:fae2538efd99c19d44e11552fb0505aba750d0cce2f2c2bf74d0c505da100b71 -->
+
+## Calculator review follow-up (#73)
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:8716bcce7d7c9e00095feaaffe89ab32f526391ce294fe37ca5231f1ebb92783 -->
+
+- [x] Fix and validate the five verified calculator review findings (2026-11-16): 17 focused tests and 434 full-suite tests (8 skipped), including ResourceWarning enforcement.
+
+<!-- /coderabbit-ai-generated:v1 -->
+
+
+<!-- /coderabbit-ai-generated:v1 -->

@@ -758,7 +758,13 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Route POST: chat completions, audio speech, image generations."""
-        content_length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            content_length = int(self.headers.get("Content-Length", 0) or 0)
+            if content_length < 0:
+                raise ValueError("negative content length")
+        except ValueError:
+            self._send_json(400, {"ok": False, "error": {"code": "invalid_request", "message": "invalid Content-Length"}})
+            return
         if self.path == "/v1/tools/calculate" and content_length > 2048:
             self._send_json(413, {"ok": False, "error": {"code": "resource_limit", "message": "request too large"}})
             return
@@ -767,7 +773,7 @@ class ChatCompletionHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/tools/calculate":
             try:
                 request = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
                 self._send_json(400, {"ok": False, "error": {"code": "invalid_request", "message": "malformed JSON"}})
                 return
             result = tool_call(request)

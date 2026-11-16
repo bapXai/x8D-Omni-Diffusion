@@ -306,3 +306,20 @@ Legend: ✅ done · 🟡 in progress · ❌ blocked/not done · 📌 queued
 - **Ask:** Ordinary arithmetic must run on a proper deterministic calculator instead of spending inference/chain-of-thought; show concise numeric results in terminal/UI and support model tool calls.
 - **Implementation PR:** `tools/x8d_calculator.py` uses bounded exact rational arithmetic; `tools/openai_chat_server.py` adds typed `POST /v1/tools/calculate` and an explicit simple-math chat fast path, without pretending trained model routing exists. See `docs/CALCULATOR.md`, tests and #67.
 - **Status:** 🟡 PR under review; host tool functions without learned x8D weights, trained System 1 tool policy pending.
+
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:830e4bca10163646fc849f46f78ddb7c7c5c035a18e5d693f16451b6d8a1a9c8 -->
+
+## 2026-11-16 · <!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:40fdfd24ae1ad4830a7ad667b050300ad9641a837ebfc3ab9809f13524f1a2fe -->
+
+✅ Calculator review fixes (#73)
+
+<!-- /coderabbit-ai-generated:v1 -->
+- Ask: verify five review findings; minimally fix HTTP length/JSON recursion handling, prompt matching, resource-limit routing, and negative CLI coverage; validate.
+- Verified all five against current code; preserve existing calculator limits and require CLI `--` for leading-negative expressions.
+
+
+<!-- /coderabbit-ai-generated:v1 -->
